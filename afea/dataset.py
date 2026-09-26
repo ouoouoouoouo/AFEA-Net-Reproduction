@@ -9,6 +9,11 @@ import torch
 from torch.utils.data import Dataset
 
 
+# Process-wide feature cache (keyed by file path) so that all folds / seeds run in one
+# process read each .npy from disk only once.
+_CACHE: Dict[str, np.ndarray] = {}
+
+
 class DualStreamFeatureDataset(Dataset):
     def __init__(self, rows: List[Dict], feat_root: str, streams=("wavlm", "fbank"),
                  max_frames: Optional[Dict[str, int]] = None, cache: bool = False):
@@ -16,22 +21,22 @@ class DualStreamFeatureDataset(Dataset):
         self.feat_root = feat_root
         self.streams = tuple(streams)
         self.max_frames = max_frames or {}
-        self._cache = {} if cache else None
+        self.cache = cache
 
     def __len__(self):
         return len(self.rows)
 
     def _load(self, stream: str, utt_id: str) -> torch.Tensor:
-        key = (stream, utt_id)
-        if self._cache is not None and key in self._cache:
-            return self._cache[key]
-        x = torch.from_numpy(np.load(os.path.join(self.feat_root, stream, utt_id + ".npy")).astype(np.float32))
+        path = os.path.join(self.feat_root, stream, utt_id + ".npy")
+        x = _CACHE.get(path) if self.cache else None
+        if x is None:
+            x = np.load(path)                      # stored as float16 -> half the RAM of float32
+            if self.cache:
+                _CACHE[path] = x
         limit = self.max_frames.get(stream)
         if limit:
             x = x[:limit]
-        if self._cache is not None:
-            self._cache[key] = x
-        return x
+        return torch.from_numpy(x.astype(np.float32))
 
     def __getitem__(self, idx):
         row = self.rows[idx]

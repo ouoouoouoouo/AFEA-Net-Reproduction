@@ -174,17 +174,28 @@ def run_cv(rows: List[Dict], cfg: Dict, folds: Optional[Sequence[int]] = None,
 
     wandb_run = None
     if cfg.get("wandb"):
-        import wandb
-        wandb_run = wandb.init(project=cfg["wandb"], name=cfg.get("wandb_name"),
-                               group=cfg.get("wandb_group"), config=cfg)
+        try:
+            import wandb
+            wandb_run = wandb.init(project=cfg["wandb"], name=cfg.get("wandb_name"),
+                                   group=cfg.get("wandb_group"), config=cfg)
+        except Exception as e:  # never let logging kill a long unattended run
+            log(f"WARNING: wandb disabled ({type(e).__name__}: {e})")
+            wandb_run = None
 
     for seed in seeds:
         for fold in folds:
-            res = train_fold(rows, fold, cfg, seed, device, log, wandb_run)
+            fold_path = os.path.join(out_dir, f"fold{fold}_seed{seed}.json") if out_dir else None
+            if fold_path and os.path.exists(fold_path) and cfg.get("resume", True):
+                with open(fold_path) as f:
+                    res = json.load(f)
+                log(f"  fold {fold} seed {seed}: found {fold_path}, skipping (resume)")
+            else:
+                res = train_fold(rows, fold, cfg, seed, device, log, wandb_run)
+                if fold_path:  # atomic write: a crash never leaves a half-written "done" file
+                    with open(fold_path + ".tmp", "w") as f:
+                        json.dump(res, f)
+                    os.replace(fold_path + ".tmp", fold_path)
             results.append(res)
-            if out_dir:
-                with open(os.path.join(out_dir, f"fold{fold}_seed{seed}.json"), "w") as f:
-                    json.dump(res, f)
     summary = summarize(results, cfg["num_classes"])
     log("SUMMARY (mean over folds): " + json.dumps(summary["fold_mean"]))
     if wandb_run is not None:
@@ -192,12 +203,14 @@ def run_cv(rows: List[Dict], cfg: Dict, folds: Optional[Sequence[int]] = None,
             for k, v in summary[part].items():
                 wandb_run.summary[f"{part}/{k}"] = v
         cols = ["fold", "seed", "epoch", "WA", "UAR", "P", "F1"]
+        import wandb
         wandb_run.log({"per_run": wandb.Table(
             columns=cols, data=[[r[c] for c in cols] for r in summary["per_run"]])})
         wandb_run.finish()
     if out_dir:
-        with open(os.path.join(out_dir, "summary.json"), "w") as f:
+        with open(os.path.join(out_dir, "summary.json.tmp"), "w") as f:
             json.dump(summary, f, indent=2)
+        os.replace(os.path.join(out_dir, "summary.json.tmp"), os.path.join(out_dir, "summary.json"))
         logf.close()
     return summary
 

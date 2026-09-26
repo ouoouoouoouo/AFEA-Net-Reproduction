@@ -1,0 +1,75 @@
+"""Experiment definitions shared by scripts/run_suite.py and scripts/aggregate.py."""
+
+from typing import Dict, List, Tuple
+
+from .config import DATASET_PRESETS
+
+
+def ablation_configs(dataset: str) -> List[Tuple[str, List[str]]]:
+    """Rows of Table 4 (IEMOCAP) / Table 6 (RAVDESS). See ASSUMPTIONS.md section 7."""
+    a, b, _ = DATASET_PRESETS[dataset]["con_weights"]
+    return [
+        ("fbank", ["--model", "fbank"]),
+        ("wavlm", ["--model", "wavlm"]),
+        ("wo_align", ["--no_align"]),
+        ("wo_afea", ["--afea_layers", "0"]),
+        ("afea1", ["--afea_layers", "1", "--no_con"]),
+        ("afea2", ["--afea_layers", "2", "--no_con"]),
+        ("afea3", ["--afea_layers", "3", "--no_con"]),
+        ("afea4", ["--afea_layers", "4", "--no_con"]),
+        ("wo_con", ["--no_con"]),
+        ("con_layer1", ["--con_weights", str(a), "0", "0"]),
+        ("con_layers12", ["--con_weights", str(a), str(b), "0"]),
+        ("afea_net", []),
+    ]
+
+
+def variant_configs(dataset: str) -> List[Tuple[str, List[str]]]:
+    """Robustness checks of the full model against the most influential assumptions."""
+    return [
+        ("afea_net_D1024", ["--lstm_hidden", "512"]),              # "512 hidden units" = per direction
+        ("afea_net_lastepoch", ["--select", "last", "--val_ratio", "0"]),  # no validation split
+    ]
+
+
+def sweep_configs(dataset: str) -> List[Tuple[str, List[str]]]:
+    """Hyper-parameter sweeps of Fig. 4 (margin) and Fig. 5 (alpha, beta, gamma, one at a time)."""
+    p = DATASET_PRESETS[dataset]
+    out = [(f"sweep_margin{m}", ["--margin", str(m)]) for m in (0.5, 1.0, 1.5, 2.0) if m != p["margin"]]
+    grid = [round(0.1 * k, 1) for k in range(1, 11)]
+    for idx, name in enumerate(("alpha", "beta", "gamma")):
+        for v in grid:
+            if v == p["con_weights"][idx]:
+                continue
+            w = list(p["con_weights"])
+            w[idx] = v
+            out.append((f"sweep_{name}{v}", ["--con_weights"] + [str(x) for x in w]))
+    return out
+
+
+# Tables 4 and 6 of the paper: (WA, UAR, P, F1)
+PAPER = {
+    "iemocap": {
+        "fbank": (.562, .563, .589, .564), "wavlm": (.728, .728, .736, .730),
+        "wo_align": (.740, .739, .747, .738), "wo_afea": (.739, .737, .744, .735),
+        "afea1": (.743, .745, .757, .742), "afea2": (.745, .746, .758, .745),
+        "afea3": (.746, .749, .755, .748), "afea4": (.744, .746, .754, .743),
+        "wo_con": (.746, .749, .755, .748), "con_layer1": (.747, .746, .758, .749),
+        "con_layers12": (.748, .748, .762, .751), "afea_net": (.751, .753, .760, .754),
+    },
+    "ravdess": {
+        "fbank": (.484, .465, .501, .459), "wavlm": (.771, .770, .788, .761),
+        "wo_align": (.784, .784, .791, .780), "wo_afea": (.782, .780, .789, .778),
+        "afea1": (.785, .787, .800, .785), "afea2": (.791, .786, .801, .790),
+        "afea3": (.795, .796, .803, .792), "afea4": (.790, .788, .797, .791),
+        "wo_con": (.795, .796, .803, .792), "con_layer1": (.797, .796, .809, .797),
+        "con_layers12": (.798, .797, .812, .799), "afea_net": (.803, .806, .808, .804),
+    },
+}
+
+PAPER_ROW_NAMES: Dict[str, str] = {
+    "fbank": "Fbank", "wavlm": "WavLM", "wo_align": "w/o L_ali", "wo_afea": "w/o AFEA",
+    "afea1": "AFEA-1", "afea2": "AFEA-2", "afea3": "AFEA-3", "afea4": "AFEA-4",
+    "wo_con": "w/o L_con", "con_layer1": "w/o L_con1", "con_layers12": "w/o L_con2",
+    "afea_net": "AFEA-Net (ours)",
+}

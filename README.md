@@ -125,6 +125,33 @@ Useful flags:
 | `--select {val,last}`, `--val_ratio` | checkpoint selection (default: best validation UAR+WA on a 10% split of the training folds) |
 | `--wandb PROJECT`, `--wandb_name`, `--wandb_group` | optional Weights & Biases logging (per-fold curves, per-fold test metrics, fold mean/std in the run summary) |
 
+### Full unattended suite (recommended)
+
+```bash
+python scripts/run_suite.py --gpus 0 1 2 3 --jobs_per_gpu 2 --stop_after_hours 22 --wandb afea-net
+python scripts/run_suite.py --gpus 0 1 2 3 --dry_run       # list the jobs without running them
+python scripts/aggregate.py                                 # rebuild runs/results.md at any time
+```
+
+The jobs run in priority order, so if time runs out the most important results are already finished:
+
+1. **main**: the 12 ablation configurations of Table 4/6, first seed.
+2. **seeds**: the same configurations for the remaining seeds. The default seeds are 42, 1, 2, 3 and 4.
+3. **variants**: the full model with a D = 1024 BiLSTM, and the full model without validation-based selection, for all seeds.
+4. **sweeps**: the margin and α/β/γ sweeps of Fig. 4–5, first seed.
+
+How the suite runs:
+
+- Each job is one (dataset, config, seed) combination, which means a 5-fold cross-validation in one process.
+- Each job writes to `runs/<dataset>/<config>/seed<k>/`.
+- Free GPU slots take the next job from a shared queue.
+- Datasets without a `manifests/<dataset>.csv` file are skipped.
+- Finished jobs are skipped when the suite runs again, and finished folds inside an interrupted job are resumed. After any interruption, re-run the same command.
+- Failed jobs are retried once.
+- Progress goes to `runs/suite_status.log`. When the suite finishes, it writes `runs/results.md` with each result as mean ± std over seeds, next to the paper's numbers.
+
+The per-process feature cache holds float16 data, about 3 GB per process for IEMOCAP. With 8 processes, make sure the node has roughly 48 GB of free RAM, or use `--jobs_per_gpu 1`.
+
 ### Weights & Biases
 
 W&B logging is off by default. To use it, run `pip install wandb`, then `wandb login`, then pass `--wandb <project>`. Each `train.py` call creates one W&B run. The run name defaults to the basename of `--out`. Per-epoch curves are logged under `fold{k}_s{seed}/...`. The test metrics and the `fold_mean/*`, `fold_std/*` and `pooled/*` values are stored in the run summary. If the compute nodes have no internet access, set `WANDB_MODE=offline` and upload the runs later with `wandb sync wandb/offline-run-*`.

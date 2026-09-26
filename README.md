@@ -1,0 +1,160 @@
+# AFEA-Net Reproduction
+
+This is an unofficial PyTorch reproduction of
+
+> X. Qi, Q. Song, G. Chen, P. Zhang, Y. Fu. **Acoustic Feature Excitation-and-Aggregation Network
+> Based on Multi-Task Learning for Speech Emotion Recognition.** *Electronics* 2025, 14, 844.
+> [doi:10.3390/electronics14050844](https://doi.org/10.3390/electronics14050844)
+
+The authors did not release code. The paper leaves the data split, the WavLM checkpoint, the Fbank library, what "512 hidden units" means, the MLP structure, the number of epochs and the seed unspecified. **Every choice this repo makes to fill those gaps is listed in [ASSUMPTIONS.md](ASSUMPTIONS.md).** Please read that file before comparing numbers.
+
+## Method at a glance
+
+```
+wav ─► WavLM-Large (frozen, frame-level, 1024-d, ~50 fps) ─► BiLSTM ─► max-pool ─► S̃_wav ─┐
+ │                                                                                         ├─► SEAL loss (B×B pairs)
+ └──► Fbank (40-d, 25 ms / 10 ms, 100 fps) ──────────────────► BiLSTM ─► max-pool ─► S̃_fil ─┘
+                                                                                           │
+          ┌────────────────────────── AFEA layer l (×3) ◄─────────────────────────────────┘
+          │  ISE: A = softmax([Lin_w(S_cat), Lin_f(S_cat)])        (stream-level, A_w + A_f = 1)
+          │       I_wav = S_wav + A_f·S_fil,  I_fil = S_fil + A_w·S_wav   (cross-stream excitation)
+          │  ISA: [W_wav; W_fil] = sigmoid(MLP([I_wav; I_fil]))        (channel-wise gates)
+          │       F_fusion = W_wav·I_wav + W_fil·I_fil
+          │  F^l_wav = (F_fusion + F^{l-1}_wav)/2,  F^l_fil = (F_fusion + F^{l-1}_fil)/2
+          └──► continuity loss:  Σ_l w_l [MSE(F^l_wav,S̃_wav) + MSE(F^l_fil,S̃_fil) + MSE(F^l_wav,F^l_fil)]
+F^3_fusion ─► FCN(512) ─► softmax ─► CE
+
+L = L_ce + L_ali + L_con
+```
+
+The implementation follows these points from the paper:
+
+1. **IEMOCAP uses 5531 utterances in 4 classes, with happy = `hap` + `exc`.** The manifest builder checks the per-class counts (sad 1084 / hap 1636 / ang 1103 / neu 1708) and fails if they do not match.
+2. **WavLM features are frame-level and 1024-d** (`microsoft/wavlm-large`, final layer).
+3. **Fbank features are 40-d, with a 25 ms frame and a 10 ms shift** (Kaldi-compatible, via torchaudio).
+4. **WavLM and Fbank each go through their own BiLSTM, followed by temporal max pooling.** Padding is masked out of the pooling.
+5. **The two streams are never frame-aligned.** They keep separate lengths and separate padding.
+6. **SEAL** is a contrastive loss over the full **B×B** matrix of `WavLM_i` × `Fbank_j` pairs in the batch, not only the diagonal where i = j. `C_ij = 1[y_i = y_j]`.
+7. **ISE** computes a softmax over the two streams (one scalar per stream), then applies **cross-stream** excitation.
+8. **ISA** uses **sigmoid** feature-wise weights, not a softmax.
+9. The final model has **3 AFEA layers**, trained with **loss = CE + alignment + continuity**.
+
+## Repository layout
+
+```
+afea/
+  data/iemocap.py     IEMOCAP 4-class manifest (exc→hap, strict 5531 check)
+  data/ravdess.py     RAVDESS 8-class manifest, actor-disjoint folds
+  features.py         WavLM + Fbank extraction
+  dataset.py          feature dataset, per-stream padding
+  model.py            BiLSTMEncoder, ISE, ISA, AFEALayer, AFEANet, SingleStreamNet
+  losses.py           seal_loss (Eq. 5-6), continuity_loss (Eq. 19-24)
+  metrics.py          WA / UAR / macro-P / macro-F1
+  trainer.py          cross-validation training loop
+  config.py           paper hyper-parameters + assumed defaults
+scripts/
+  prepare_data.py     build manifests/*.csv
+  extract_features.py write features/<ds>/{wavlm,fbank}/<utt>.npy
+  train.py            train / evaluate one configuration with 5-fold CV
+  run_ablations.sh    all rows of Table 4 / Table 6
+tests/                unit tests (shapes, equations, SEAL B×B, ISE/ISA, parser, smoke training)
+ASSUMPTIONS.md        every unspecified detail and the choice made
+```
+
+## Setup
+
+```bash
+pip install -r requirements.txt
+pytest -q                      # 18 tests, CPU only, no data needed
+```
+
+## 1. Prepare the data
+
+IEMOCAP must be obtained from [USC SAIL](https://sail.usc.edu/iemocap/) under its license. RAVDESS is available on [Zenodo](https://zenodo.org/record/1188976).
+
+```bash
+python scripts/prepare_data.py --dataset iemocap --root /path/to/IEMOCAP_full_release --out manifests/iemocap.csv
+# 5531 utterances -> manifests/iemocap.csv
+# per class: {'sad': 1084, 'hap': 1636, 'ang': 1103, 'neu': 1708}
+python scripts/prepare_data.py --dataset ravdess --root /path/to/RAVDESS --out manifests/ravdess.csv
+```
+
+## 2. Extract features
+
+```bash
+python scripts/extract_features.py --manifest manifests/iemocap.csv --out features/iemocap --device cuda
+```
+
+Options:
+
+- `--wavlm_checkpoint`: the WavLM checkpoint to load (default `microsoft/wavlm-large`).
+- `--wavlm_layer`: the hidden-state index to use (default: the last layer).
+- `--no_cmvn`: turn off per-utterance Fbank normalisation.
+- `--fp32`: store features in float32 instead of float16.
+
+Disk use for IEMOCAP is about 2.5 GB for WavLM features in float16.
+
+## 3. Train and evaluate
+
+```bash
+# Full AFEA-Net (IEMOCAP: margin 1.0, α,β,γ = 0.8,0.5,0.2; RAVDESS: 1.5, 0.3,0.2,0.1)
+python scripts/train.py --dataset iemocap --manifest manifests/iemocap.csv \
+    --feat_root features/iemocap --out runs/iemocap/afea_net --cache
+
+# All ablation rows of Table 4, followed by a summary table
+bash scripts/run_ablations.sh iemocap manifests/iemocap.csv features/iemocap --cache
+```
+
+Each run writes these files to its `--out` directory:
+
+- `config.json`
+- `train.log`
+- `fold{k}_seed{s}.json`: per-epoch history, the test metrics, the confusion matrix and the predictions.
+- `summary.json`: `fold_mean`, `fold_std`, `pooled` and `per_run`.
+
+Useful flags:
+
+| flag | meaning |
+|------|---------|
+| `--model {afea,wavlm,fbank}` | full model or single-stream baseline |
+| `--afea_layers L` | number of AFEA layers (0 = "w/o AFEA" concatenation baseline) |
+| `--no_align` / `--no_con` | drop L_ali / L_con |
+| `--margin`, `--con_weights` | override the dataset presets |
+| `--lstm_hidden` | per-direction BiLSTM size (default 256 → D = 512; 512 → D = 1024) |
+| `--epochs`, `--seeds`, `--folds` | protocol (defaults: 50 epochs, seed 42, all 5 folds) |
+| `--select {val,last}`, `--val_ratio` | checkpoint selection (default: best validation UAR+WA on a 10% split of the training folds) |
+
+## Default protocol
+
+The paper does not specify this protocol. See ASSUMPTIONS.md, sections 2 and 6.
+
+- **IEMOCAP**: leave-one-session-out 5-fold CV, so each test fold contains speakers not seen in training. **RAVDESS**: 5 actor-disjoint folds.
+- In each fold, a stratified 10% of the training folds is held out for validation. The epoch with the best validation `UAR + WA` is evaluated on the test fold, so the test fold is never used for model selection.
+- Adam with lr 1e-3, batch 64, 50 epochs, seed 42.
+- The reported number is the mean of the per-fold metrics. Pooled metrics are also saved.
+
+## Paper results (targets)
+
+| Dataset | WA | UAR | P | F1 |
+|---------|----|-----|---|----|
+| IEMOCAP (Table 4) | 75.1 | 75.3 | 76.0 | 75.4 |
+| RAVDESS (Table 6) | 80.3 | 80.6 | 80.8 | 80.4 |
+
+IEMOCAP ablations (Table 4): Fbank 56.2, WavLM 72.8, w/o L_ali 74.0, w/o AFEA 73.9, AFEA-1/2/3/4 74.3/74.5/74.6/74.4, full model 75.1 (WA).
+
+**Status:** the code is complete and unit-tested. Full IEMOCAP and RAVDESS runs have not been performed in this repo yet, because the data is licensed and a GPU is required. Results will be added here once they are available. Numbers from a speaker-independent split can come out lower than the paper's if the authors used a different split.
+
+## Citation
+
+```bibtex
+@article{qi2025afeanet,
+  title   = {Acoustic Feature Excitation-and-Aggregation Network Based on Multi-Task Learning for Speech Emotion Recognition},
+  author  = {Qi, Xin and Song, Qing and Chen, Guowei and Zhang, Pengzhou and Fu, Yao},
+  journal = {Electronics},
+  volume  = {14},
+  number  = {5},
+  pages   = {844},
+  year    = {2025},
+  doi     = {10.3390/electronics14050844}
+}
+```

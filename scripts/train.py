@@ -12,6 +12,7 @@
     --no_con                               w/o L_con
 """
 import argparse
+import os
 
 import _path  # noqa: F401
 import torch
@@ -53,6 +54,10 @@ def parse_args():
     ap.add_argument("--max_fbank_frames", type=int, default=None)
     ap.add_argument("--cache", action="store_true", help="keep loaded features in RAM")
     ap.add_argument("--num_workers", type=int, default=0)
+    ap.add_argument("--wandb", default=None, metavar="PROJECT",
+                    help="log to Weights & Biases under this project (off by default)")
+    ap.add_argument("--wandb_name", default=None, help="run name (default: basename of --out)")
+    ap.add_argument("--wandb_group", default=None, help="e.g. iemocap_ablations")
     ap.add_argument("--device", default="cuda" if torch.cuda.is_available() else "cpu")
     return ap.parse_args()
 
@@ -73,6 +78,8 @@ def main():
     cfg["max_frames"] = {"wavlm": args.max_wavlm_frames, "fbank": args.max_fbank_frames}
     if args.select == "val" and args.val_ratio <= 0:
         raise SystemExit("--select val requires --val_ratio > 0")
+    if args.wandb and not args.wandb_name and args.out:
+        cfg["wandb_name"] = os.path.basename(os.path.normpath(args.out))
     rows = read_manifest(args.manifest)
     run_cv(rows, cfg, folds=args.folds, seeds=args.seeds, device=args.device, out_dir=args.out)
 

@@ -98,8 +98,12 @@ def make_loader(rows, cfg, shuffle, seed=0):
                       drop_last=False)
 
 
-def train_fold(rows: List[Dict], test_fold: int, cfg: Dict, seed: int, device, log=print) -> Dict:
+def train_fold(rows: List[Dict], test_fold: int, cfg: Dict, seed: int, device, log=print,
+               wandb_run=None) -> Dict:
     set_seed(seed)
+    prefix = f"fold{test_fold}_s{seed}"
+    if wandb_run is not None:
+        wandb_run.define_metric(f"{prefix}/*", step_metric=f"{prefix}/epoch")
     train_rows, val_rows, test_rows = split_fold(rows, test_fold, cfg["val_ratio"], seed)
     train_loader = make_loader(train_rows, cfg, shuffle=True, seed=seed)
     val_loader = make_loader(val_rows, cfg, shuffle=False) if val_rows else None
@@ -130,6 +134,8 @@ def train_fold(rows: List[Dict], test_fold: int, cfg: Dict, seed: int, device, l
             if cfg["select"] == "val" and score > best_score:
                 best_score, best_state, best_epoch = score, copy.deepcopy(model.state_dict()), epoch
         history.append(rec)
+        if wandb_run is not None:
+            wandb_run.log({f"{prefix}/{k}": v for k, v in rec.items()})
         log(f"  fold {test_fold} seed {seed} ep {epoch:3d} " +
             " ".join(f"{k}={v:.4f}" for k, v in rec.items() if k not in ("epoch",)))
     if cfg["select"] == "val" and best_state is not None:
@@ -139,6 +145,10 @@ def train_fold(rows: List[Dict], test_fold: int, cfg: Dict, seed: int, device, l
     metrics, y, p = evaluate(model, test_loader, cfg, device)
     log(f"  fold {test_fold} seed {seed} TEST (epoch {best_epoch}): " +
         " ".join(f"{k}={v:.4f}" for k, v in metrics.items()))
+    if wandb_run is not None:
+        for k, v in metrics.items():
+            wandb_run.summary[f"{prefix}/test_{k}"] = v
+        wandb_run.summary[f"{prefix}/selected_epoch"] = best_epoch
     return {"fold": test_fold, "seed": seed, "selected_epoch": best_epoch, "test": metrics,
             "n_train": len(train_rows), "n_val": len(val_rows), "n_test": len(test_rows),
             "confusion": confusion(y, p, cfg["num_classes"]).tolist(),
@@ -162,15 +172,29 @@ def run_cv(rows: List[Dict], cfg: Dict, folds: Optional[Sequence[int]] = None,
             logf.write(msg + "\n")
             logf.flush()
 
+    wandb_run = None
+    if cfg.get("wandb"):
+        import wandb
+        wandb_run = wandb.init(project=cfg["wandb"], name=cfg.get("wandb_name"),
+                               group=cfg.get("wandb_group"), config=cfg)
+
     for seed in seeds:
         for fold in folds:
-            res = train_fold(rows, fold, cfg, seed, device, log)
+            res = train_fold(rows, fold, cfg, seed, device, log, wandb_run)
             results.append(res)
             if out_dir:
                 with open(os.path.join(out_dir, f"fold{fold}_seed{seed}.json"), "w") as f:
                     json.dump(res, f)
     summary = summarize(results, cfg["num_classes"])
     log("SUMMARY (mean over folds): " + json.dumps(summary["fold_mean"]))
+    if wandb_run is not None:
+        for part in ("fold_mean", "fold_std", "pooled"):
+            for k, v in summary[part].items():
+                wandb_run.summary[f"{part}/{k}"] = v
+        cols = ["fold", "seed", "epoch", "WA", "UAR", "P", "F1"]
+        wandb_run.log({"per_run": wandb.Table(
+            columns=cols, data=[[r[c] for c in cols] for r in summary["per_run"]])})
+        wandb_run.finish()
     if out_dir:
         with open(os.path.join(out_dir, "summary.json"), "w") as f:
             json.dump(summary, f, indent=2)

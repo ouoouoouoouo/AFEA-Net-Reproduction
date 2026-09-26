@@ -123,6 +123,22 @@ Useful flags:
 | `--lstm_hidden` | per-direction BiLSTM size (default 256 → D = 512; 512 → D = 1024) |
 | `--epochs`, `--seeds`, `--folds` | protocol (defaults: 50 epochs, seed 42, all 5 folds) |
 | `--select {val,last}`, `--val_ratio` | checkpoint selection (default: best validation UAR+WA on a 10% split of the training folds) |
+| `--wandb PROJECT`, `--wandb_name`, `--wandb_group` | optional Weights & Biases logging (per-fold curves, per-fold test metrics, fold mean/std in the run summary) |
+
+### Weights & Biases
+
+W&B logging is off by default. To use it, run `pip install wandb`, then `wandb login`, then pass `--wandb <project>`. Each `train.py` call creates one W&B run. The run name defaults to the basename of `--out`. Per-epoch curves are logged under `fold{k}_s{seed}/...`. The test metrics and the `fold_mean/*`, `fold_std/*` and `pooled/*` values are stored in the run summary. If the compute nodes have no internet access, set `WANDB_MODE=offline` and upload the runs later with `wandb sync wandb/offline-run-*`.
+
+### Multiple GPUs
+
+Each run uses one GPU. The model is small, so `train.py` does not use DDP. To use several GPUs, run different configurations at the same time:
+
+```bash
+GPUS="0 1 2 3" bash scripts/run_ablations.sh iemocap manifests/iemocap.csv features/iemocap \
+    --cache --wandb afea-net --wandb_group iemocap_ablations
+```
+
+The 12 configurations are split round-robin across the listed GPUs, one process per GPU at a time. Each run's stdout goes to `runs/<ds>/<name>/stdout.log`. With `--cache`, each process holds about 5 GB of IEMOCAP features in RAM.
 
 ## Default protocol
 

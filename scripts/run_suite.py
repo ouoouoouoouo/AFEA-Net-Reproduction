@@ -22,7 +22,7 @@ import time
 
 import _path  # noqa: F401
 
-from afea.suite import ablation_configs, sweep_configs, variant_configs
+from afea.suite import ablation_configs, diagnosis_configs, sweep_configs, variant_configs
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
@@ -34,14 +34,25 @@ def build_jobs(args):
         print(f"WARNING: manifests/{d}.csv not found, skipping dataset {d}")
     first, rest = args.seeds[0], args.seeds[1:]
     jobs = []
-    if "main" in args.tiers:
-        jobs += [(d, n, first, a) for d in datasets for n, a in ablation_configs(d)]
-    if "seeds" in args.tiers:
-        jobs += [(d, n, s, a) for s in rest for d in datasets for n, a in ablation_configs(d)]
-    if "variants" in args.tiers:
-        jobs += [(d, n, s, a) for s in args.seeds for d in datasets for n, a in variant_configs(d)]
-    if "sweeps" in args.tiers:
-        jobs += [(d, n, first, a) for d in datasets for n, a in sweep_configs(d)]
+    for tier in args.tiers:  # tiers run in the order given on the command line
+        if tier == "main":
+            jobs += [(d, n, first, a) for d in datasets for n, a in ablation_configs(d)]
+        elif tier == "seeds":
+            jobs += [(d, n, s, a) for s in rest for d in datasets for n, a in ablation_configs(d)]
+        elif tier == "variants":
+            jobs += [(d, n, s, a) for s in args.seeds for d in datasets for n, a in variant_configs(d)]
+        elif tier == "sweeps":
+            jobs += [(d, n, first, a) for d in datasets for n, a in sweep_configs(d)]
+        elif tier == "diag":
+            for d in datasets:
+                if d != "iemocap":
+                    continue
+                has_all = os.path.isdir(os.path.join(ROOT, "features", d, "wavlm_all"))
+                for n, a, _ in diagnosis_configs(d):
+                    if "all" in a and not has_all:
+                        print(f"WARNING: features/{d}/wavlm_all missing, skipping {n}")
+                        continue
+                    jobs += [(d, n, s, a) for s in args.diag_seeds]
     return jobs
 
 
@@ -68,7 +79,8 @@ def main():
     ap.add_argument("--datasets", nargs="+", default=["iemocap", "ravdess"])
     ap.add_argument("--seeds", type=int, nargs="+", default=[42, 1, 2, 3, 4])
     ap.add_argument("--tiers", nargs="+", default=["main", "seeds", "variants", "sweeps"],
-                    choices=["main", "seeds", "variants", "sweeps"])
+                    choices=["main", "seeds", "variants", "sweeps", "diag"])
+    ap.add_argument("--diag_seeds", type=int, nargs="+", default=[42, 1, 2])
     ap.add_argument("--stop_after_hours", type=float, default=None,
                     help="do not START new jobs after this many hours (running jobs finish)")
     ap.add_argument("--threads_per_job", type=int, default=4, help="OMP/MKL threads per process")
@@ -147,6 +159,7 @@ def main():
     status(f"suite finished in {(time.time() - t_start) / 3600:.2f} h; "
            f"{len(failed)} job(s) still failing: {[f'{j[0]}/{j[1]}/seed{j[2]}' for j in failed]}")
     subprocess.call([sys.executable, os.path.join(ROOT, "scripts", "aggregate.py")])
+    subprocess.call([sys.executable, os.path.join(ROOT, "scripts", "diagnose.py")])
 
 
 if __name__ == "__main__":

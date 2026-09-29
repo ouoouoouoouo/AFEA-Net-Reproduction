@@ -69,6 +69,13 @@ class WavLMExtractor:
         h = out.last_hidden_state if self.layer is None else out.hidden_states[self.layer]
         return h[0].float().cpu()
 
+    @torch.no_grad()
+    def all_layers(self, wav: torch.Tensor) -> torch.Tensor:
+        """All hidden states stacked: [L, M, D] (L = 25 for WavLM-Large: CNN/projection + 24 layers)."""
+        inputs = self.feature_extractor(wav.numpy(), sampling_rate=SAMPLE_RATE, return_tensors="pt")
+        out = self.model(inputs["input_values"].to(self.device), output_hidden_states=True)
+        return torch.stack([h[0] for h in out.hidden_states]).float().cpu()
+
 
 def save_feature(path: str, feat: torch.Tensor, fp16: bool = True) -> None:
     arr = feat.numpy().astype(np.float16 if fp16 else np.float32)

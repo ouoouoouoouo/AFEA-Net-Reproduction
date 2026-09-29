@@ -14,7 +14,7 @@ import torch.nn.functional as F
 from torch.utils.data import DataLoader
 
 from .dataset import DualStreamFeatureDataset, collate_dual
-from .losses import continuity_loss, seal_loss
+from .losses import continuity_loss, seal_loss, seal_stats
 from .metrics import compute_metrics, confusion
 from .model import AFEANet, SingleStreamNet
 
@@ -41,51 +41,114 @@ def split_fold(rows: List[Dict], test_fold: int, val_ratio: float, seed: int):
     return train, val, test
 
 
+def wavlm_dir(cfg: Dict) -> str:
+    return "wavlm_all" if cfg.get("wavlm_layers", "last") == "all" else "wavlm"
+
+
 def build_model(cfg: Dict) -> nn.Module:
+    n_layers = cfg.get("wavlm_num_layers", 0) if wavlm_dir(cfg) == "wavlm_all" else 0
+    common = dict(lstm_hidden=cfg["lstm_hidden"], lstm_dropout=cfg["lstm_dropout"],
+                  fcn_hidden=cfg["fcn_hidden"], fcn_dropout=cfg["fcn_dropout"],
+                  dropout_pos=cfg.get("dropout_pos", "pre_pool"))
     if cfg["model"] == "afea":
         return AFEANet(cfg["num_classes"], FEAT_DIMS["wavlm"], FEAT_DIMS["fbank"],
-                       lstm_hidden=cfg["lstm_hidden"], lstm_dropout=cfg["lstm_dropout"],
                        num_afea_layers=cfg["afea_layers"], isa_hidden=cfg["isa_hidden"],
-                       fcn_hidden=cfg["fcn_hidden"], fcn_dropout=cfg["fcn_dropout"])
-    return SingleStreamNet(cfg["num_classes"], FEAT_DIMS[cfg["model"]], lstm_hidden=cfg["lstm_hidden"],
-                           lstm_dropout=cfg["lstm_dropout"], fcn_hidden=cfg["fcn_hidden"],
-                           fcn_dropout=cfg["fcn_dropout"])
+                       wavlm_num_layers=n_layers, **common)
+    return SingleStreamNet(cfg["num_classes"], FEAT_DIMS[cfg["model"]],
+                           wavlm_num_layers=n_layers if cfg["model"] == "wavlm" else 0, **common)
 
 
 def streams_for(cfg: Dict) -> Sequence[str]:
-    return ("wavlm", "fbank") if cfg["model"] == "afea" else (cfg["model"],)
+    if cfg["model"] == "afea":
+        return (wavlm_dir(cfg), "fbank")
+    return (wavlm_dir(cfg),) if cfg["model"] == "wavlm" else ("fbank",)
 
 
-def forward_and_loss(model: nn.Module, batch: Dict, cfg: Dict, device) -> Dict[str, torch.Tensor]:
+def _to(x, device):
+    return [t.to(device, non_blocking=True) for t in x] if isinstance(x, list) else x.to(device)
+
+
+def forward_and_loss(model: nn.Module, batch: Dict, cfg: Dict, device, shuffle=None,
+                     generator=None) -> Dict[str, torch.Tensor]:
     y = batch["label"].to(device)
     if cfg["model"] == "afea":
-        out = model(batch["wavlm"].to(device), batch["wavlm_len"],
-                    batch["fbank"].to(device), batch["fbank_len"])
+        out = model(_to(batch["wavlm"], device), batch["wavlm_len"],
+                    batch["fbank"].to(device), batch["fbank_len"], shuffle=shuffle, generator=generator)
     else:
         s = cfg["model"]
-        out = model(batch[s].to(device), batch[s + "_len"])
+        out = model(_to(batch[s], device), batch[s + "_len"])
     losses = {"ce": F.cross_entropy(out["logits"], y)}
     if cfg["model"] == "afea":
         if cfg["use_align"]:
-            losses["ali"] = seal_loss(out["s_wav"], out["s_fil"], y, cfg["margin"])
+            losses["ali"] = seal_loss(out["s_wav"], out["s_fil"], y, cfg["margin"],
+                                      cfg.get("seal_norm", "l2"))
         if cfg["use_con"] and out["f_wav"]:
             losses["con"] = continuity_loss(out["f_wav"], out["f_fil"], out["s_wav"], out["s_fil"],
                                             cfg["con_weights"])
     losses["total"] = sum(losses.values())     # Eq. 16: L = L_ce + L_ali + L_con
     losses["logits"] = out["logits"]
+    losses["_out"] = out
     return losses
 
 
+# ----------------------------------------------------------------------------------------------
+# Diagnostics. None of these consume the global RNG, so enabling them does not change training.
+
 @torch.no_grad()
-def evaluate(model, loader, cfg, device):
+def batch_diagnostics(out: Dict, y: torch.Tensor, cfg: Dict) -> Dict[str, float]:
+    d = {"train_acc": float((out["logits"].argmax(-1) == y).float().mean())}
+    if cfg["model"] != "afea":
+        return d
+    sw, sf = out["s_wav"], out["s_fil"]
+    d.update({"s_wav_norm": float(sw.norm(dim=-1).mean()), "s_fil_norm": float(sf.norm(dim=-1).mean()),
+              "s_nonneg_frac": float(((sw >= 0).float().mean() + (sf >= 0).float().mean()) / 2)})
+    d.update(seal_stats(sw, sf, y, cfg["margin"], cfg.get("seal_norm", "l2")))
+    for l, ex in enumerate(out["afea"], 1):
+        d[f"ise_a_wav_L{l}"] = float(ex["ise_weights"][:, 0].mean())      # softmax share of WavLM
+        d[f"isa_w_wav_L{l}"] = float(ex["isa_w_wav"].mean())              # sigmoid gates
+        d[f"isa_w_fil_L{l}"] = float(ex["isa_w_fil"].mean())
+    for l, (fw, ff) in enumerate(zip(out["f_wav"], out["f_fil"]), 1):
+        d[f"con_intra_L{l}"] = float(F.mse_loss(fw, sw) + F.mse_loss(ff, sf))
+        d[f"con_inter_L{l}"] = float(F.mse_loss(fw, ff))
+    return d
+
+
+def grad_norms(model: nn.Module) -> Dict[str, float]:
+    groups = {}
+    for name, p in model.named_parameters():
+        if p.grad is not None:
+            g = name.split(".")[0]
+            groups[g] = groups.get(g, 0.0) + float(p.grad.detach().pow(2).sum())
+    return {f"grad_{g}": v ** 0.5 for g, v in groups.items()}
+
+
+@torch.no_grad()
+def evaluate(model, loader, cfg, device, probes: bool = False):
+    """Metrics (+ mean CE). With `probes`, also accuracy when one stream's pooled vector is
+    shuffled across the batch: a small drop means the model barely uses that stream."""
     model.eval()
-    ys, ps = [], []
+    ys, ps, ce, n = [], [], 0.0, 0
+    do_probe = probes and cfg["model"] == "afea"
+    probe_preds = {"wav": [], "fil": []}
+    gen = torch.Generator().manual_seed(1234)
     for batch in loader:
         out = forward_and_loss(model, batch, cfg, device)
         ps.append(out["logits"].argmax(-1).cpu())
         ys.append(batch["label"])
+        ce += float(out["ce"]) * len(batch["label"])
+        n += len(batch["label"])
+        if do_probe:
+            for stream in ("wav", "fil"):
+                o = forward_and_loss(model, batch, cfg, device, shuffle=stream, generator=gen)
+                probe_preds[stream].append(o["logits"].argmax(-1).cpu())
     y, p = torch.cat(ys).numpy(), torch.cat(ps).numpy()
-    return compute_metrics(y, p, cfg["num_classes"]), y, p
+    m = compute_metrics(y, p, cfg["num_classes"])
+    m["CE"] = ce / max(n, 1)
+    if do_probe:
+        for stream in ("wav", "fil"):
+            pm = compute_metrics(y, torch.cat(probe_preds[stream]).numpy(), cfg["num_classes"])
+            m[f"WA_shuf_{stream}"] = pm["WA"]
+    return m, y, p
 
 
 def make_loader(rows, cfg, shuffle, seed=0):
@@ -113,6 +176,7 @@ def train_fold(rows: List[Dict], test_fold: int, cfg: Dict, seed: int, device, l
     opt = torch.optim.Adam(model.parameters(), lr=cfg["lr"], weight_decay=cfg["weight_decay"])
     best_score, best_state, best_epoch = -1.0, None, -1
     history = []
+    diag = cfg.get("diag", True)
     for epoch in range(1, cfg["epochs"] + 1):
         model.train()
         t0, agg, n = time.time(), {}, 0
@@ -120,15 +184,23 @@ def train_fold(rows: List[Dict], test_fold: int, cfg: Dict, seed: int, device, l
             losses = forward_and_loss(model, batch, cfg, device)
             opt.zero_grad()
             losses["total"].backward()
-            opt.step()
             bs = batch["label"].shape[0]
+            if diag:
+                extra = batch_diagnostics(losses["_out"], batch["label"].to(device), cfg)
+                extra.update(grad_norms(model))
+                for k, v in extra.items():
+                    agg["diag/" + k] = agg.get("diag/" + k, 0.0) + v * bs
+            opt.step()
             n += bs
             for k, v in losses.items():
-                if k != "logits":
+                if k not in ("logits", "_out"):
                     agg[k] = agg.get(k, 0.0) + float(v.detach()) * bs
         rec = {"epoch": epoch, **{k: v / n for k, v in agg.items()}, "time": time.time() - t0}
+        if diag and getattr(model, "layer_mix", None) is not None:
+            for i, w in enumerate(model.layer_mix.weights().tolist()):
+                rec[f"diag/layer_w{i:02d}"] = w
         if val_loader is not None:
-            vm, _, _ = evaluate(model, val_loader, cfg, device)
+            vm, _, _ = evaluate(model, val_loader, cfg, device, probes=diag)
             rec.update({"val_" + k: v for k, v in vm.items()})
             score = vm["UAR"] + vm["WA"]
             if cfg["select"] == "val" and score > best_score:
@@ -137,19 +209,25 @@ def train_fold(rows: List[Dict], test_fold: int, cfg: Dict, seed: int, device, l
         if wandb_run is not None:
             wandb_run.log({f"{prefix}/{k}": v for k, v in rec.items()})
         log(f"  fold {test_fold} seed {seed} ep {epoch:3d} " +
-            " ".join(f"{k}={v:.4f}" for k, v in rec.items() if k not in ("epoch",)))
+            " ".join(f"{k}={v:.4f}" for k, v in rec.items() if k != "epoch" and not k.startswith("diag/")))
     if cfg["select"] == "val" and best_state is not None:
         model.load_state_dict(best_state)
     else:
         best_epoch = cfg["epochs"]
-    metrics, y, p = evaluate(model, test_loader, cfg, device)
+    full, y, p = evaluate(model, test_loader, cfg, device, probes=diag)
+    metrics = {k: full[k] for k in ("WA", "UAR", "P", "F1")}
+    probes = {k: v for k, v in full.items() if k not in metrics}
+    layer_w = (model.layer_mix.weights().tolist() if getattr(model, "layer_mix", None) is not None else None)
     log(f"  fold {test_fold} seed {seed} TEST (epoch {best_epoch}): " +
-        " ".join(f"{k}={v:.4f}" for k, v in metrics.items()))
+        " ".join(f"{k}={v:.4f}" for k, v in full.items()))
     if wandb_run is not None:
-        for k, v in metrics.items():
+        for k, v in full.items():
             wandb_run.summary[f"{prefix}/test_{k}"] = v
         wandb_run.summary[f"{prefix}/selected_epoch"] = best_epoch
+        if layer_w is not None:
+            wandb_run.summary[f"{prefix}/layer_weights"] = layer_w
     return {"fold": test_fold, "seed": seed, "selected_epoch": best_epoch, "test": metrics,
+            "test_probe": probes, "layer_weights": layer_w,
             "n_train": len(train_rows), "n_val": len(val_rows), "n_test": len(test_rows),
             "confusion": confusion(y, p, cfg["num_classes"]).tolist(),
             "y_true": y.tolist(), "y_pred": p.tolist(), "history": history}
@@ -159,6 +237,9 @@ def run_cv(rows: List[Dict], cfg: Dict, folds: Optional[Sequence[int]] = None,
            seeds: Sequence[int] = (42,), device="cpu", out_dir: Optional[str] = None) -> Dict:
     folds = list(folds) if folds else sorted({r["fold"] for r in rows})
     results = []
+    if wavlm_dir(cfg) == "wavlm_all" and cfg["model"] in ("afea", "wavlm"):
+        probe = np.load(os.path.join(cfg["feat_root"], "wavlm_all", rows[0]["utt_id"] + ".npy"), mmap_mode="r")
+        cfg["wavlm_num_layers"] = int(probe.shape[0])
     logf = None
     if out_dir:
         os.makedirs(out_dir, exist_ok=True)

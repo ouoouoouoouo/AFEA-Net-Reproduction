@@ -152,6 +152,37 @@ How the suite runs:
 
 The per-process feature cache holds float16 data, about 3 GB per process for IEMOCAP. With 8 processes, make sure the node has roughly 48 GB of free RAM, or use `--jobs_per_gpu 1`.
 
+### Diagnosis suite (locating the gap to the paper)
+
+```bash
+python scripts/extract_features.py --manifest manifests/iemocap.csv --out features/iemocap \
+    --streams wavlm_all --device cuda                      # all 25 WavLM layers, ~64 GB
+python scripts/run_suite.py --gpus 0 1 2 3 --jobs_per_gpu 2 --tiers diag main seeds \
+    --datasets iemocap ravdess --seeds 42 1 2 3 4 --diag_seeds 42 1 2 --wandb afea-net
+```
+
+The `diag` tier (`afea/suite.py::diagnosis_configs`) runs 17 IEMOCAP configurations with 3 seeds each:
+
+| Group | Configurations |
+|---|---|
+| Baselines re-run with diagnostics | full model, AFEA-3 without L_con, w/o AFEA |
+| SEAL normalisation | `--seal_norm l2c`, the same with margin 1.5, `--seal_norm none` |
+| Dropout after pooling | `--dropout_pos post_pool` for WavLM-only, w/o AFEA, AFEA-3 and the full model |
+| Weighted sum of WavLM layers | `--wavlm_layers all` for WavLM-only, w/o AFEA and the full model |
+| All fixes combined | the fixes above together |
+
+Every run logs these diagnostics to `fold*.json` and W&B. The diagnostics do not change training; a test checks this.
+
+- **Stream-shuffle probes**: the pooled WavLM or Fbank vector is shuffled across the batch, and the drop in accuracy shows how much the prediction depends on that stream.
+- **ISE and ISA internals**: the ISE softmax share of each stream per layer, and the ISA gate values.
+- **SEAL distances**: mean positive and negative pair distances, and the share of negative pairs still inside the margin.
+- **Continuity terms**: the intra and inter terms per layer.
+- **Gradient norms**: one per module.
+- **Fitting**: train accuracy, validation CE and WA.
+- **Layer weights**: the learned WavLM layer weights, for weighted-sum runs.
+
+To summarise the results, run `python scripts/diagnose.py` to write `runs/diagnostics.md`, and `python scripts/aggregate.py` to write `runs/results.md`. The latter includes the change in WA against each reference configuration, computed on the same seeds.
+
 ### Weights & Biases
 
 W&B logging is off by default. To use it, run `pip install wandb`, then `wandb login`, then pass `--wandb <project>`. Each `train.py` call creates one W&B run. The run name defaults to the basename of `--out`. Per-epoch curves are logged under `fold{k}_s{seed}/...`. The test metrics and the `fold_mean/*`, `fold_std/*` and `pooled/*` values are stored in the run summary. If the compute nodes have no internet access, set `WANDB_MODE=offline` and upload the runs later with `wandb sync wandb/offline-run-*`.

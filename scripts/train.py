@@ -54,6 +54,12 @@ def parse_args():
     ap.add_argument("--max_fbank_frames", type=int, default=None)
     ap.add_argument("--cache", action="store_true", help="keep loaded features in RAM")
     ap.add_argument("--num_workers", type=int, default=0)
+    ap.add_argument("--seal_norm", choices=["l2", "l2c", "none"], default="l2",
+                    help="SEAL embedding normalisation: l2 (default), l2c (batch-centred then l2), none")
+    ap.add_argument("--dropout_pos", choices=["pre_pool", "post_pool"], default="pre_pool")
+    ap.add_argument("--wavlm_layers", choices=["last", "all"], default="last",
+                    help="all = learnable weighted sum of every WavLM layer (needs features/<ds>/wavlm_all)")
+    ap.add_argument("--no_diag", action="store_true", help="disable diagnostic metrics / probes")
     ap.add_argument("--wandb", default=None, metavar="PROJECT",
                     help="log to Weights & Biases under this project (off by default)")
     ap.add_argument("--wandb_name", default=None, help="run name (default: basename of --out)")
@@ -69,6 +75,7 @@ def main():
     cfg["num_classes"] = preset["num_classes"]
     cfg["margin"] = args.margin if args.margin is not None else preset["margin"]
     cfg["use_align"] = not args.no_align
+    cfg["diag"] = not args.no_diag
     cfg["use_con"] = not args.no_con and args.model == "afea" and args.afea_layers > 0
     weights = args.con_weights if args.con_weights is not None else preset["con_weights"]
     if cfg["use_con"] and len(weights) != args.afea_layers:

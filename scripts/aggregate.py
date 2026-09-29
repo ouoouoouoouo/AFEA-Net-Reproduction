@@ -11,7 +11,8 @@ import os
 import _path  # noqa: F401
 import numpy as np
 
-from afea.suite import PAPER, PAPER_ROW_NAMES, ablation_configs, sweep_configs, variant_configs
+from afea.suite import (PAPER, PAPER_ROW_NAMES, ablation_configs, diagnosis_configs, sweep_configs,
+                        variant_configs)
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 KEYS = ("WA", "UAR", "P", "F1")
@@ -50,6 +51,26 @@ def table(ds, configs, with_paper):
     return lines
 
 
+def diagnosis_table(ds):
+    lines = ["| config | args | seeds | WA | UAR | F1 | reference | ref WA (same seeds) | ΔWA |",
+             "|---|---|---|---|---|---|---|---|---|"]
+    for name, args, ref in diagnosis_configs(ds):
+        runs = load(ds, name)
+        if not runs:
+            lines.append(f"| {name} | `{' '.join(args)}` | 0 | – | – | – | {ref} | – | – |")
+            continue
+        ref_runs = {s: v for s, v in load(ds, ref).items() if s in runs}
+        if ref_runs:
+            rw = np.mean([v["WA"] for v in ref_runs.values()]) * 100
+            ow = np.mean([runs[s]["WA"] for s in ref_runs]) * 100
+            ref_txt, delta = f"{rw:.1f}", f"{ow - rw:+.1f}"
+        else:
+            ref_txt, delta = "–", "–"
+        lines.append(f"| {name} | `{' '.join(args)}` | {len(runs)} | {fmt(runs, 'WA')} | {fmt(runs, 'UAR')} | "
+                     f"{fmt(runs, 'F1')} | {ref} | {ref_txt} | {delta} |")
+    return lines
+
+
 def main():
     out = ["# Reproduction results", "",
            "Values are % (mean ± std over seeds of the 5-fold mean). Protocol: see ASSUMPTIONS.md.", ""]
@@ -60,6 +81,8 @@ def main():
         out += table(ds, ablation_configs(ds), True) + [""]
         out += ["### Assumption variants of the full model", ""] + table(ds, variant_configs(ds), False) + [""]
         out += ["### Hyper-parameter sweeps (Fig. 4-5)", ""] + table(ds, sweep_configs(ds), False) + [""]
+        out += ["### Diagnosis experiments (Δ = WA change vs the reference config, same seeds)", ""]
+        out += diagnosis_table(ds) + [""]
     text = "\n".join(out)
     print(text)
     with open(os.path.join(ROOT, "runs", "results.md"), "w") as f:

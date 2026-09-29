@@ -47,6 +47,38 @@ def sweep_configs(dataset: str) -> List[Tuple[str, List[str]]]:
     return out
 
 
+def diagnosis_configs(dataset: str) -> List[Tuple[str, List[str], str]]:
+    """Follow-up experiments that locate the gap to the paper (RESULTS.md). Each entry is
+    (name, train.py args, reference config it should be compared with). Every run logs the
+    diagnostics in afea/trainer.py (stream-shuffle probes, ISE/ISA weights, SEAL distances,
+    gradient norms, WavLM layer weights)."""
+    return [
+        # 0. baselines re-run with diagnostics (training is identical to the earlier runs)
+        ("dx_afea_net", [], "afea_net"),
+        ("dx_afea3_nocon", ["--afea_layers", "3", "--no_con"], "afea3"),
+        ("dx_wo_afea", ["--afea_layers", "0"], "wo_afea"),
+        # 1. SEAL normalisation (margin >= sqrt(2) issue)
+        ("seal_l2c", ["--seal_norm", "l2c"], "afea_net"),
+        ("seal_l2c_m1.5", ["--seal_norm", "l2c", "--margin", "1.5"], "afea_net"),
+        ("seal_none", ["--seal_norm", "none"], "afea_net"),
+        # 2. dropout after max pooling
+        ("post_wavlm", ["--model", "wavlm", "--dropout_pos", "post_pool"], "wavlm"),
+        ("post_wo_afea", ["--afea_layers", "0", "--dropout_pos", "post_pool"], "wo_afea"),
+        ("post_afea3_nocon", ["--afea_layers", "3", "--no_con", "--dropout_pos", "post_pool"], "afea3"),
+        ("post_afea_net", ["--dropout_pos", "post_pool"], "afea_net"),
+        # 3. learnable weighted sum of all WavLM layers
+        ("wsum_wavlm", ["--model", "wavlm", "--wavlm_layers", "all"], "wavlm"),
+        ("wsum_wo_afea", ["--afea_layers", "0", "--wavlm_layers", "all"], "wo_afea"),
+        ("wsum_afea_net", ["--wavlm_layers", "all"], "afea_net"),
+        # 4. all fixes combined
+        ("fix_wavlm", ["--model", "wavlm", "--dropout_pos", "post_pool", "--wavlm_layers", "all"], "wavlm"),
+        ("fix_wo_afea", ["--afea_layers", "0", "--dropout_pos", "post_pool", "--wavlm_layers", "all"], "wo_afea"),
+        ("fix_afea_net", ["--dropout_pos", "post_pool", "--wavlm_layers", "all"], "afea_net"),
+        ("fix_afea_net_l2c", ["--dropout_pos", "post_pool", "--wavlm_layers", "all", "--seal_norm", "l2c"],
+         "afea_net"),
+    ]
+
+
 # Tables 4 and 6 of the paper: (WA, UAR, P, F1)
 PAPER = {
     "iemocap": {

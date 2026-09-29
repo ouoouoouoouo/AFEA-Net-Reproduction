@@ -20,7 +20,8 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--manifest", required=True)
     ap.add_argument("--out", required=True)
-    ap.add_argument("--streams", nargs="+", default=["wavlm", "fbank"], choices=["wavlm", "fbank"])
+    ap.add_argument("--streams", nargs="+", default=["wavlm", "fbank"], choices=["wavlm", "wavlm_all", "fbank"],
+                    help="wavlm_all = every hidden layer, [L, M, 1024] (~64 GB for IEMOCAP)")
     ap.add_argument("--wavlm_checkpoint", default="microsoft/wavlm-large")
     ap.add_argument("--wavlm_layer", type=int, default=None,
                     help="hidden_states index; default = final layer (last_hidden_state)")
@@ -33,7 +34,8 @@ def main():
     rows = read_manifest(args.manifest)
     for s in args.streams:
         os.makedirs(os.path.join(args.out, s), exist_ok=True)
-    wavlm = WavLMExtractor(args.wavlm_checkpoint, args.wavlm_layer, args.device) if "wavlm" in args.streams else None
+    need_wavlm = any(s.startswith("wavlm") for s in args.streams)
+    wavlm = WavLMExtractor(args.wavlm_checkpoint, args.wavlm_layer, args.device) if need_wavlm else None
 
     for row in tqdm(rows):
         targets = {s: os.path.join(args.out, s, row["utt_id"] + ".npy") for s in args.streams}
@@ -44,6 +46,8 @@ def main():
             save_feature(targets["fbank"], compute_fbank(wav, cmvn=not args.no_cmvn), fp16=not args.fp32)
         if "wavlm" in targets:
             save_feature(targets["wavlm"], wavlm(wav), fp16=not args.fp32)
+        if "wavlm_all" in targets:
+            save_feature(targets["wavlm_all"], wavlm.all_layers(wav), fp16=not args.fp32)
 
 
 if __name__ == "__main__":

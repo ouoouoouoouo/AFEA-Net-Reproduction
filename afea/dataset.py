@@ -28,6 +28,15 @@ class DualStreamFeatureDataset(Dataset):
 
     def _load(self, stream: str, utt_id: str) -> torch.Tensor:
         path = os.path.join(self.feat_root, stream, utt_id + ".npy")
+        if stream == "wavlm_all":
+            # [L, M, 1024] float16, ~25x larger than one layer: memory-map instead of a per-process
+            # cache so that concurrent jobs share the OS page cache. Kept in float16; LayerMix
+            # mixes the layers on the GPU.
+            x = np.load(path, mmap_mode="r")
+            limit = self.max_frames.get("wavlm")
+            if limit:
+                x = x[:, :limit]
+            return torch.from_numpy(np.array(x))           # copy out of the (read-only) mmap
         x = _CACHE.get(path) if self.cache else None
         if x is None:
             x = np.load(path)                      # stored as float16 -> half the RAM of float32
@@ -40,7 +49,8 @@ class DualStreamFeatureDataset(Dataset):
 
     def __getitem__(self, idx):
         row = self.rows[idx]
-        item = {s: self._load(s, row["utt_id"]) for s in self.streams}
+        # "wavlm_all" (all layers) is exposed under the same "wavlm" key as the single-layer feature
+        item = {("wavlm" if s.startswith("wavlm") else s): self._load(s, row["utt_id"]) for s in self.streams}
         item["label"] = row["label_id"]
         return item
 
@@ -56,6 +66,11 @@ def pad_stream(seqs: List[torch.Tensor]):
 def collate_dual(batch: List[Dict]) -> Dict[str, torch.Tensor]:
     out = {"label": torch.tensor([b["label"] for b in batch], dtype=torch.long)}
     for stream in ("wavlm", "fbank"):
-        if stream in batch[0]:
+        if stream not in batch[0]:
+            continue
+        if batch[0][stream].dim() == 3:  # all-layer WavLM [L, M, D]: keep unpadded, LayerMix pads
+            out[stream] = [b[stream] for b in batch]
+            out[stream + "_len"] = torch.tensor([b[stream].shape[1] for b in batch], dtype=torch.long)
+        else:
             out[stream], out[stream + "_len"] = pad_stream([b[stream] for b in batch])
     return out

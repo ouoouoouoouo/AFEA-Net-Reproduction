@@ -10,6 +10,7 @@ from typing import Dict, List, Optional
 
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 from torch.nn.utils.rnn import pack_padded_sequence, pad_packed_sequence
 
 
@@ -26,20 +27,56 @@ class BiLSTMEncoder(nn.Module):
 
     `hidden_per_direction` is the LSTM hidden size of each direction; the output
     dimension is D = 2 * hidden_per_direction (forward/backward states concatenated).
+    `dropout_pos`: "pre_pool" (default, dropout on frame outputs before max pooling) or
+    "post_pool" (dropout on the pooled vector; no train/test mismatch in the max).
     """
 
-    def __init__(self, input_dim: int, hidden_per_direction: int = 256, dropout: float = 0.5):
+    def __init__(self, input_dim: int, hidden_per_direction: int = 256, dropout: float = 0.5,
+                 dropout_pos: str = "pre_pool"):
         super().__init__()
+        if dropout_pos not in ("pre_pool", "post_pool"):
+            raise ValueError(dropout_pos)
         self.lstm = nn.LSTM(input_dim, hidden_per_direction, num_layers=1,
                             batch_first=True, bidirectional=True)
         self.dropout = nn.Dropout(dropout)
+        self.dropout_pos = dropout_pos
         self.out_dim = 2 * hidden_per_direction
 
     def forward(self, x: torch.Tensor, lengths: torch.Tensor) -> torch.Tensor:
         packed = pack_padded_sequence(x, lengths.cpu(), batch_first=True, enforce_sorted=False)
         out, _ = self.lstm(packed)
         out, _ = pad_packed_sequence(out, batch_first=True, total_length=x.shape[1])
-        return masked_max_pool(self.dropout(out), lengths)
+        if self.dropout_pos == "pre_pool":
+            return masked_max_pool(self.dropout(out), lengths)
+        return self.dropout(masked_max_pool(out, lengths))
+
+
+class LayerMix(nn.Module):
+    """Learnable softmax-weighted sum of WavLM hidden layers (SUPERB-style).
+
+    Input: list of per-utterance tensors [L, M_i, D] (float16 is fine); each layer is
+    layer-normalised (no affine) before mixing because hidden-state scales differ by layer.
+    Output: zero-padded [B, max M_i, D] float32.
+    """
+
+    def __init__(self, num_layers: int):
+        super().__init__()
+        self.logits = nn.Parameter(torch.zeros(num_layers))
+
+    def weights(self) -> torch.Tensor:
+        return torch.softmax(self.logits, dim=0)
+
+    def forward(self, xs: List[torch.Tensor]) -> torch.Tensor:
+        w = self.weights()
+        mixed = []
+        for x in xs:
+            with torch.no_grad():  # layer norm has no parameters; only the mixing weights learn
+                xn = F.layer_norm(x.float(), x.shape[-1:]).to(x.dtype)
+            mixed.append(torch.einsum("l,lmd->md", w.to(xn.dtype), xn).float())
+        out = mixed[0].new_zeros(len(mixed), max(m.shape[0] for m in mixed), mixed[0].shape[1])
+        for i, m in enumerate(mixed):
+            out[i, : m.shape[0]] = m
+        return out
 
 
 class InterSpeechExcitation(nn.Module):
@@ -115,18 +152,31 @@ class AFEANet(nn.Module):
 
     def __init__(self, num_classes: int, wavlm_dim: int = 1024, fbank_dim: int = 40,
                  lstm_hidden: int = 256, lstm_dropout: float = 0.5, num_afea_layers: int = 3,
-                 isa_hidden: Optional[int] = None, fcn_hidden: int = 512, fcn_dropout: float = 0.0):
+                 isa_hidden: Optional[int] = None, fcn_hidden: int = 512, fcn_dropout: float = 0.0,
+                 dropout_pos: str = "pre_pool", wavlm_num_layers: int = 0):
         super().__init__()
-        self.enc_wav = BiLSTMEncoder(wavlm_dim, lstm_hidden, lstm_dropout)
-        self.enc_fil = BiLSTMEncoder(fbank_dim, lstm_hidden, lstm_dropout)
+        self.layer_mix = LayerMix(wavlm_num_layers) if wavlm_num_layers > 0 else None
+        self.enc_wav = BiLSTMEncoder(wavlm_dim, lstm_hidden, lstm_dropout, dropout_pos)
+        self.enc_fil = BiLSTMEncoder(fbank_dim, lstm_hidden, lstm_dropout, dropout_pos)
         dim = self.enc_wav.out_dim
         self.afea = nn.ModuleList([AFEALayer(dim, isa_hidden) for _ in range(num_afea_layers)])
         cls_in = dim if num_afea_layers > 0 else 2 * dim
         self.classifier = make_classifier(cls_in, num_classes, fcn_hidden, fcn_dropout)
 
-    def forward(self, wavlm, wavlm_len, fbank, fbank_len) -> Dict[str, object]:
+    def forward(self, wavlm, wavlm_len, fbank, fbank_len, shuffle: Optional[str] = None,
+                generator: Optional[torch.Generator] = None) -> Dict[str, object]:
+        """`shuffle` in {"wav", "fil"} permutes that stream's pooled vectors across the batch
+        (diagnostic probe: how much does the prediction depend on that stream?)."""
+        if isinstance(wavlm, (list, tuple)):
+            wavlm = self.layer_mix(wavlm)
         s_wav = self.enc_wav(wavlm, wavlm_len)
         s_fil = self.enc_fil(fbank, fbank_len)
+        if shuffle is not None:
+            perm = torch.randperm(s_wav.shape[0], generator=generator).to(s_wav.device)
+            if shuffle == "wav":
+                s_wav = s_wav[perm]
+            else:
+                s_fil = s_fil[perm]
         f_wav, f_fil = s_wav, s_fil
         f_wav_list: List[torch.Tensor] = []
         f_fil_list: List[torch.Tensor] = []
@@ -148,11 +198,15 @@ class SingleStreamNet(nn.Module):
     """Single-stream baseline of Table 4: BiLSTM -> max pooling -> FCN."""
 
     def __init__(self, num_classes: int, input_dim: int, lstm_hidden: int = 256,
-                 lstm_dropout: float = 0.5, fcn_hidden: int = 512, fcn_dropout: float = 0.0):
+                 lstm_dropout: float = 0.5, fcn_hidden: int = 512, fcn_dropout: float = 0.0,
+                 dropout_pos: str = "pre_pool", wavlm_num_layers: int = 0):
         super().__init__()
-        self.enc = BiLSTMEncoder(input_dim, lstm_hidden, lstm_dropout)
+        self.layer_mix = LayerMix(wavlm_num_layers) if wavlm_num_layers > 0 else None
+        self.enc = BiLSTMEncoder(input_dim, lstm_hidden, lstm_dropout, dropout_pos)
         self.classifier = make_classifier(self.enc.out_dim, num_classes, fcn_hidden, fcn_dropout)
 
     def forward(self, x, x_len) -> Dict[str, object]:
+        if isinstance(x, (list, tuple)):
+            x = self.layer_mix(x)
         s = self.enc(x, x_len)
         return {"logits": self.classifier(s), "fusion": s}

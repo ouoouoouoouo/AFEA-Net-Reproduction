@@ -185,7 +185,7 @@ The paper does not specify this protocol. See ASSUMPTIONS.md, sections 2 and 6.
 
 IEMOCAP ablations (Table 4): Fbank 56.2, WavLM 72.8, w/o L_ali 74.0, w/o AFEA 73.9, AFEA-1/2/3/4 74.3/74.5/74.6/74.4, full model 75.1 (WA).
 
-**Status:** the code is complete and unit-tested. Full IEMOCAP and RAVDESS runs have not been performed in this repo yet, because the data is licensed and a GPU is required. Results will be added here once they are available. Numbers from a speaker-independent split can come out lower than the paper's if the authors used a different split.
+**Status:** the full IEMOCAP suite has been run with 5 seeds. **See [RESULTS.md](RESULTS.md).** The full model reaches **71.1 ± 0.5 WA / 72.0 ± 0.4 UAR**, against the paper's 75.1 / 75.3. The single-stream baselines come within about 1 point of the paper (WavLM 71.7 vs 72.8). The gains the paper attributes to fusion, AFEA depth and SEAL do not reproduce under this protocol. RAVDESS has not been run yet.
 
 ## Citation
 

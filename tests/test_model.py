@@ -66,3 +66,14 @@ def test_no_afea_concat_baseline():
     model = AFEANet(num_classes=4, lstm_hidden=8, num_afea_layers=0).eval()
     out = model(torch.randn(2, 10, 1024), torch.tensor([10, 5]), torch.randn(2, 20, 40), torch.tensor([20, 9]))
     assert out["fusion"].shape == (2, 32) and out["f_wav"] == []
+
+
+def test_inter_continuity_term_is_independent_of_afea_parameters():
+    """Eq. 14-15 imply F^l_wav - F^l_fil = (S~_wav - S~_fil) / 2^l, so the inter-speech
+    continuity loss (Eq. 24) only sees the pooled BiLSTM features, never the AFEA modules."""
+    torch.manual_seed(0)
+    model = AFEANet(num_classes=4, lstm_hidden=8, num_afea_layers=4).eval()
+    out = model(torch.randn(3, 20, 1024), torch.tensor([20, 11, 7]), torch.randn(3, 40, 40), torch.tensor([40, 30, 9]))
+    for l in range(4):
+        expected = (out["s_wav"] - out["s_fil"]) / 2 ** (l + 1)
+        assert torch.allclose(out["f_wav"][l] - out["f_fil"][l], expected, atol=1e-6)

@@ -109,3 +109,42 @@ def test_new_variants_train_and_log_diagnostics(tmp_path):
     assert len(res["layer_weights"]) == 3 and "WA_shuf_fil" in res["test_probe"]
     assert "diag/ise_a_wav_L3" in res["history"][0] and "val_WA_shuf_wav" in res["history"][0]
     assert "diag/grad_enc_fil" in res["history"][0] and "diag/layer_w02" in res["history"][0]
+
+
+class _RecordingModel(torch.nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.seen = None
+
+    def forward(self, x, output_hidden_states=False):
+        self.seen = x.clone()
+        from types import SimpleNamespace
+        h = x.unsqueeze(-1).repeat(1, 1, 4)
+        return SimpleNamespace(last_hidden_state=h, hidden_states=(h, h))
+
+
+def test_wavlm_input_norm_modes():
+    from transformers import Wav2Vec2FeatureExtractor
+    from afea.features import WavLMExtractor
+    wav = torch.randn(1600) * 3 + 2
+    for mode, cfg_norm, expect_norm in (("auto", False, False), ("auto", True, True), ("on", False, True),
+                                        ("off", True, False)):
+        m = _RecordingModel()
+        ex = WavLMExtractor(model=m, feature_extractor=Wav2Vec2FeatureExtractor(do_normalize=cfg_norm),
+                            input_norm=mode)
+        ex(wav)
+        x = m.seen[0]
+        if expect_norm:
+            assert abs(float(x.mean())) < 1e-4 and abs(float(x.std()) - 1) < 1e-2
+        else:
+            assert torch.allclose(x, wav, atol=1e-5)
+
+
+def test_uar_selection_and_oracle_are_recorded(tmp_path):
+    rows = _synthetic(tmp_path)
+    s = run_cv(rows, _cfg(tmp_path, select_metric="uar"), folds=[1], device="cpu", out_dir=str(tmp_path / "r"))
+    import json
+    res = json.load(open(tmp_path / "r" / "fold1_seed42.json"))
+    assert set(res["oracle_test"]) == {"epoch", "WA", "UAR"}
+    assert res["oracle_test"]["UAR"] >= max(h["mon_test_UAR"] for h in res["history"]) - 1e-12
+    assert "oracle_fold_mean (test-selected epoch, optimistic)" in s

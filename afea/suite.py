@@ -84,6 +84,21 @@ def diagnosis_configs(dataset: str) -> List[Tuple[str, List[str], str]]:
     ]
 
 
+def protocol_configs(dataset: str) -> List[Tuple[str, List[str], str]]:
+    """Paper-faithful protocol checks: final WavLM layer (official unilm default), epoch picked
+    by validation UAR only; each on the original features and on features extracted with
+    the official waveform layer-norm (features/<ds>_wnorm, skipped if absent). Every run also
+    logs the optimistic test-selected ("oracle") number to bound the effect of selection."""
+    base = [("wavlm", ["--model", "wavlm"]), ("wo_afea", ["--afea_layers", "0"]),
+            ("wo_align", ["--no_align"]), ("afea_net", [])]
+    out = []
+    for name, args in base:
+        out.append((f"p_{name}", args + ["--select_metric", "uar"], name))
+        out.append((f"pn_{name}", args + ["--select_metric", "uar", "--feat_root", f"features/{dataset}_wnorm"],
+                    f"p_{name}"))
+    return out
+
+
 # Tables 4 and 6 of the paper: (WA, UAR, P, F1)
 PAPER = {
     "iemocap": {

@@ -11,8 +11,8 @@ import os
 import _path  # noqa: F401
 import numpy as np
 
-from afea.suite import (PAPER, PAPER_ROW_NAMES, ablation_configs, diagnosis_configs, sweep_configs,
-                        variant_configs)
+from afea.suite import (PAPER, PAPER_ROW_NAMES, ablation_configs, diagnosis_configs, protocol_configs,
+                        sweep_configs, variant_configs)
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 KEYS = ("WA", "UAR", "P", "F1")
@@ -71,6 +71,27 @@ def diagnosis_table(ds):
     return lines
 
 
+def protocol_table(ds):
+    lines = ["| config | seeds | WA | UAR | F1 | oracle WA | oracle UAR | paper WA / UAR |",
+             "|---|---|---|---|---|---|---|---|"]
+    for name, _, ref in protocol_configs(ds):
+        paths = sorted(glob.glob(os.path.join(ROOT, "runs", ds, name, "seed*", "summary.json")))
+        if not paths:
+            lines.append(f"| {name} | 0 | – | – | – | – | – | |")
+            continue
+        sums = [json.load(open(p)) for p in paths]
+        runs = {str(i): s["fold_mean"] for i, s in enumerate(sums)}
+        okey = "oracle_fold_mean (test-selected epoch, optimistic)"
+        orc = [s[okey] for s in sums if okey in s]
+        o_wa = f"{np.mean([o['WA'] for o in orc]) * 100:.1f}" if orc else "–"
+        o_uar = f"{np.mean([o['UAR'] for o in orc]) * 100:.1f}" if orc else "–"
+        base = name.split("_", 1)[1]
+        p = PAPER.get(ds, {}).get(base)
+        lines.append(f"| {name} | {len(runs)} | {fmt(runs, 'WA')} | {fmt(runs, 'UAR')} | {fmt(runs, 'F1')} | "
+                     f"{o_wa} | {o_uar} | {f'{p[0]*100:.1f} / {p[1]*100:.1f}' if p else ''} |")
+    return lines
+
+
 def main():
     out = ["# Reproduction results", "",
            "Values are % (mean ± std over seeds of the 5-fold mean). Protocol: see ASSUMPTIONS.md.", ""]
@@ -83,6 +104,10 @@ def main():
         out += ["### Hyper-parameter sweeps (Fig. 4-5)", ""] + table(ds, sweep_configs(ds), False) + [""]
         out += ["### Diagnosis experiments (Δ = WA change vs the reference config, same seeds)", ""]
         out += diagnosis_table(ds) + [""]
+        out += ["### Protocol checks (final WavLM layer, epoch selected by validation UAR)", "",
+                "`p_*` = original features, `pn_*` = official waveform layer-norm before WavLM. "
+                "Oracle = epoch chosen on the test fold (optimistic, for reference only).", ""]
+        out += protocol_table(ds) + [""]
     text = "\n".join(out)
     print(text)
     with open(os.path.join(ROOT, "runs", "results.md"), "w") as f:

@@ -25,6 +25,9 @@ def main():
     ap.add_argument("--wavlm_checkpoint", default="microsoft/wavlm-large")
     ap.add_argument("--wavlm_layer", type=int, default=None,
                     help="hidden_states index; default = final layer (last_hidden_state)")
+    ap.add_argument("--wavlm_input_norm", choices=["auto", "on", "off"], default="auto",
+                    help="waveform layer-norm before WavLM: auto = checkpoint config; on = official "
+                         "unilm example for WavLM Large (cfg.normalize=True)")
     ap.add_argument("--no_cmvn", action="store_true", help="disable per-utterance Fbank CMVN")
     ap.add_argument("--device", default="cuda")
     ap.add_argument("--fp32", action="store_true")
@@ -35,7 +38,11 @@ def main():
     for s in args.streams:
         os.makedirs(os.path.join(args.out, s), exist_ok=True)
     need_wavlm = any(s.startswith("wavlm") for s in args.streams)
-    wavlm = WavLMExtractor(args.wavlm_checkpoint, args.wavlm_layer, args.device) if need_wavlm else None
+    wavlm = (WavLMExtractor(args.wavlm_checkpoint, args.wavlm_layer, args.device, input_norm=args.wavlm_input_norm)
+             if need_wavlm else None)
+    if wavlm is not None:
+        print(f"WavLM checkpoint config do_normalize={wavlm.config_do_normalize}; "
+              f"waveform normalisation used: {wavlm.normalize}")
 
     for row in tqdm(rows):
         targets = {s: os.path.join(args.out, s, row["utt_id"] + ".npy") for s in args.streams}

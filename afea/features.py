@@ -50,21 +50,37 @@ class WavLMExtractor:
     Default checkpoint: `microsoft/wavlm-large` (hidden size 1024, the dimension reported
     in the paper). `layer=None` returns the final transformer output (`last_hidden_state`);
     an integer selects `hidden_states[layer]` (0 = CNN/projection output, 24 = last layer).
+
+    `input_norm` controls waveform normalisation before the model:
+      "auto" - whatever the checkpoint's feature extractor config says (`do_normalize`)
+      "on"   - per-utterance zero-mean / unit-variance, i.e. `F.layer_norm(wav, wav.shape)` as in the
+               official microsoft/unilm WavLM example when `cfg.normalize` is True (WavLM Large)
+      "off"  - raw waveform
     """
 
     def __init__(self, checkpoint: str = "microsoft/wavlm-large", layer: Optional[int] = None,
-                 device: str = "cpu", model=None, feature_extractor=None):
+                 device: str = "cpu", model=None, feature_extractor=None, input_norm: str = "auto"):
         from transformers import AutoFeatureExtractor, WavLMModel
+        if input_norm not in ("auto", "on", "off"):
+            raise ValueError(input_norm)
         self.device = device
         self.layer = layer
         self.model = (model if model is not None else WavLMModel.from_pretrained(checkpoint)).to(device).eval()
         self.feature_extractor = (feature_extractor if feature_extractor is not None
                                   else AutoFeatureExtractor.from_pretrained(checkpoint))
+        self.config_do_normalize = bool(getattr(self.feature_extractor, "do_normalize", False))
+        self.normalize = self.config_do_normalize if input_norm == "auto" else input_norm == "on"
+        self.feature_extractor.do_normalize = False          # we apply it ourselves (below)
+
+    def _inputs(self, wav: torch.Tensor) -> torch.Tensor:
+        if self.normalize:
+            wav = torch.nn.functional.layer_norm(wav, wav.shape)
+        inputs = self.feature_extractor(wav.numpy(), sampling_rate=SAMPLE_RATE, return_tensors="pt")
+        return inputs["input_values"].to(self.device)
 
     @torch.no_grad()
     def __call__(self, wav: torch.Tensor) -> torch.Tensor:
-        inputs = self.feature_extractor(wav.numpy(), sampling_rate=SAMPLE_RATE, return_tensors="pt")
-        x = inputs["input_values"].to(self.device)
+        x = self._inputs(wav)
         out = self.model(x, output_hidden_states=self.layer is not None)
         h = out.last_hidden_state if self.layer is None else out.hidden_states[self.layer]
         return h[0].float().cpu()
@@ -72,8 +88,7 @@ class WavLMExtractor:
     @torch.no_grad()
     def all_layers(self, wav: torch.Tensor) -> torch.Tensor:
         """All hidden states stacked: [L, M, D] (L = 25 for WavLM-Large: CNN/projection + 24 layers)."""
-        inputs = self.feature_extractor(wav.numpy(), sampling_rate=SAMPLE_RATE, return_tensors="pt")
-        out = self.model(inputs["input_values"].to(self.device), output_hidden_states=True)
+        out = self.model(self._inputs(wav), output_hidden_states=True)
         return torch.stack([h[0] for h in out.hidden_states]).float().cpu()
 
 

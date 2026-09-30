@@ -202,9 +202,15 @@ def train_fold(rows: List[Dict], test_fold: int, cfg: Dict, seed: int, device, l
         if val_loader is not None:
             vm, _, _ = evaluate(model, val_loader, cfg, device, probes=diag)
             rec.update({"val_" + k: v for k, v in vm.items()})
-            score = vm["UAR"] + vm["WA"]
+            score = vm["UAR"] if cfg.get("select_metric", "uar_wa") == "uar" else vm["UAR"] + vm["WA"]
             if cfg["select"] == "val" and score > best_score:
                 best_score, best_state, best_epoch = score, copy.deepcopy(model.state_dict()), epoch
+        if diag:
+            # Monitoring only: the test fold is NEVER used for selection. Logged so that the
+            # optimistic "best epoch chosen on the test fold" number can be reported separately
+            # and the effect of the selection protocol can be quantified.
+            tm, _, _ = evaluate(model, test_loader, cfg, device)
+            rec.update({"mon_test_WA": tm["WA"], "mon_test_UAR": tm["UAR"]})
         history.append(rec)
         if wandb_run is not None:
             wandb_run.log({f"{prefix}/{k}": v for k, v in rec.items()})
@@ -226,8 +232,12 @@ def train_fold(rows: List[Dict], test_fold: int, cfg: Dict, seed: int, device, l
         wandb_run.summary[f"{prefix}/selected_epoch"] = best_epoch
         if layer_w is not None:
             wandb_run.summary[f"{prefix}/layer_weights"] = layer_w
+    oracle = None
+    if diag and history and "mon_test_UAR" in history[0]:
+        o = max(history, key=lambda h: h["mon_test_UAR"])
+        oracle = {"epoch": o["epoch"], "WA": o["mon_test_WA"], "UAR": o["mon_test_UAR"]}
     return {"fold": test_fold, "seed": seed, "selected_epoch": best_epoch, "test": metrics,
-            "test_probe": probes, "layer_weights": layer_w,
+            "test_probe": probes, "layer_weights": layer_w, "oracle_test": oracle,
             "n_train": len(train_rows), "n_val": len(val_rows), "n_test": len(test_rows),
             "confusion": confusion(y, p, cfg["num_classes"]).tolist(),
             "y_true": y.tolist(), "y_pred": p.tolist(), "history": history}
@@ -308,7 +318,12 @@ def summarize(results: List[Dict], num_classes: int) -> Dict:
                                     [t for r in results if r["seed"] == s for t in r["y_pred"]],
                                     num_classes) for s in seeds]
         pooled = {k: float(np.mean([m[k] for m in per_seed])) for k in keys}
+    out_oracle = {}
+    if results and all(r.get("oracle_test") for r in results):
+        out_oracle = {"oracle_fold_mean (test-selected epoch, optimistic)":
+                      {k: float(np.mean([r["oracle_test"][k] for r in results])) for k in ("WA", "UAR")}}
     return {
+        **out_oracle,
         "fold_mean": {k: float(np.mean(v)) for k, v in per.items()},
         "fold_std": {k: float(np.std(v)) for k, v in per.items()},
         "pooled": pooled,

@@ -183,6 +183,21 @@ Every run logs these diagnostics to `fold*.json` and W&B. The diagnostics do not
 
 To summarise the results, run `python scripts/diagnose.py` to write `runs/diagnostics.md`, and `python scripts/aggregate.py` to write `runs/results.md`. The latter includes the change in WA against each reference configuration, computed on the same seeds.
 
+### Protocol checks
+
+```bash
+python scripts/extract_features.py --manifest manifests/iemocap.csv --out features/iemocap_wnorm \
+    --streams wavlm fbank --wavlm_input_norm on --device cuda
+python scripts/run_suite.py --gpus 0 1 2 3 --tiers protocol --datasets iemocap ravdess --diag_seeds 42 1 2
+```
+
+The protocol tier follows the paper setting as closely as possible:
+
+- WavLM features come from the final layer (the official default).
+- The epoch is chosen on validation UAR.
+- `p_*` runs use the original features. `pn_*` runs use features extracted with the official waveform layer-norm.
+- Each run also reports the optimistic "oracle" number, where the epoch is chosen on the test fold. This bounds how much of the gap could come from model selection.
+
 ### Weights & Biases
 
 W&B logging is off by default. To use it, run `pip install wandb`, then `wandb login`, then pass `--wandb <project>`. Each `train.py` call creates one W&B run. The run name defaults to the basename of `--out`. Per-epoch curves are logged under `fold{k}_s{seed}/...`. The test metrics and the `fold_mean/*`, `fold_std/*` and `pooled/*` values are stored in the run summary. If the compute nodes have no internet access, set `WANDB_MODE=offline` and upload the runs later with `wandb sync wandb/offline-run-*`.

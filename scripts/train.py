@@ -50,6 +50,8 @@ def parse_args():
     ap.add_argument("--fcn_dropout", type=float, default=d["fcn_dropout"])
     ap.add_argument("--val_ratio", type=float, default=d["val_ratio"])
     ap.add_argument("--select", choices=["val", "last"], default=d["select"])
+    ap.add_argument("--select_metric", choices=["uar_wa", "uar"], default="uar_wa",
+                    help="validation score used to pick the epoch")
     ap.add_argument("--seeds", type=int, nargs="+", default=[d["seed"]])
     ap.add_argument("--folds", type=int, nargs="+", default=None)
     ap.add_argument("--max_wavlm_frames", type=int, default=None)

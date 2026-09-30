@@ -22,7 +22,7 @@ import time
 
 import _path  # noqa: F401
 
-from afea.suite import ablation_configs, diagnosis_configs, sweep_configs, variant_configs
+from afea.suite import ablation_configs, diagnosis_configs, protocol_configs, sweep_configs, variant_configs
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
@@ -43,6 +43,14 @@ def build_jobs(args):
             jobs += [(d, n, s, a) for s in args.seeds for d in datasets for n, a in variant_configs(d)]
         elif tier == "sweeps":
             jobs += [(d, n, first, a) for d in datasets for n, a in sweep_configs(d)]
+        elif tier == "protocol":
+            for d in datasets:
+                for n, a, _ in protocol_configs(d):
+                    feat = next((a[i + 1] for i, x in enumerate(a) if x == "--feat_root"), None)
+                    if feat and not os.path.isdir(os.path.join(ROOT, feat)):
+                        print(f"WARNING: {feat} missing, skipping {d}/{n}")
+                        continue
+                    jobs += [(d, n, s, a) for s in args.diag_seeds]
         elif tier == "diag":
             for d in datasets:
                 if d != "iemocap":
@@ -68,7 +76,9 @@ def command(job, args):
            "--out", out_dir(d, name, seed), "--seeds", str(seed), "--cache"]
     if args.wandb:
         cmd += ["--wandb", args.wandb, "--wandb_group", f"{d}_{name}", "--wandb_name", f"{d}_{name}_s{seed}"]
-    # global extras first, config-specific args last so they win (argparse keeps the last value)
+    # global extras first, config-specific args last so they win (argparse keeps the last value);
+    # repo-relative feature paths in config args are made absolute
+    cfg_args = [os.path.join(ROOT, a) if a.startswith("features/") else a for a in cfg_args]
     return cmd + args.extra + cfg_args
 
 
@@ -79,7 +89,7 @@ def main():
     ap.add_argument("--datasets", nargs="+", default=["iemocap", "ravdess"])
     ap.add_argument("--seeds", type=int, nargs="+", default=[42, 1, 2, 3, 4])
     ap.add_argument("--tiers", nargs="+", default=["main", "seeds", "variants", "sweeps"],
-                    choices=["main", "seeds", "variants", "sweeps", "diag"])
+                    choices=["main", "seeds", "variants", "sweeps", "diag", "protocol"])
     ap.add_argument("--diag_seeds", type=int, nargs="+", default=[42, 1, 2])
     ap.add_argument("--stop_after_hours", type=float, default=None,
                     help="do not START new jobs after this many hours (running jobs finish)")

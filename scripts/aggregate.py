@@ -102,8 +102,9 @@ def main():
         out += table(ds, ablation_configs(ds), True) + [""]
         out += ["### Assumption variants of the full model", ""] + table(ds, variant_configs(ds), False) + [""]
         out += ["### Hyper-parameter sweeps (Fig. 4-5)", ""] + table(ds, sweep_configs(ds), False) + [""]
-        out += ["### Diagnosis experiments (Δ = WA change vs the reference config, same seeds)", ""]
-        out += diagnosis_table(ds) + [""]
+        if any(load(ds, n) for n, _, _ in diagnosis_configs(ds)):
+            out += ["### Diagnosis experiments (Δ = WA change vs the reference config, same seeds)", ""]
+            out += diagnosis_table(ds) + [""]
         out += ["### Protocol checks (final WavLM layer, epoch selected by validation UAR)", "",
                 "`p_*` = original features, `pn_*` = official waveform layer-norm before WavLM. "
                 "Oracle = epoch chosen on the test fold (optimistic, for reference only).", ""]

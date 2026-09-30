@@ -167,3 +167,22 @@ The validation WA (about 90 %, from the same actors as training) is far above th
 | Remaining protocol / unreported details (split, epochs, selection) | | about 1 WA on IEMOCAP; unknown on RAVDESS |
 
 After the layer fix, the headline IEMOCAP number is close to the paper: 73.8 / 74.9 against 75.1 / 75.3. The paper's central claims, that dual-stream fusion, SEAL and AFEA depth each add accuracy, are **not supported** by our runs. The diagnostics show that the fused model relies almost entirely on WavLM.
+
+## Round 2b: ISA MLP structure
+
+Eq. 12 writes `f_mlp` for both ISA gates, while Fig. 3 draws two separate branches. Our default uses one MLP with a shared hidden layer, whose output is split into W_wav and W_fil (ASSUMPTIONS M-10). `--isa_mlp separate` instead uses two independent `Linear(2D, D) → ReLU → Linear(D, D)` MLPs. Each configuration below is run with 3 seeds (42, 1, 2) and compared with the shared-MLP reference on the same seeds.
+
+| Configuration | Shared MLP WA | Separate MLPs WA / UAR / F1 | ΔWA | Δ WA when Fbank is shuffled (separate) |
+|---|---|---|---|---|
+| AFEA-3, no L_con | 70.0 | 70.0 ± 0.5 / 71.2 ± 0.3 / 70.5 ± 0.5 | +0.1 | −0.8 |
+| AFEA-Net | 71.3 | 71.4 ± 0.8 / 72.2 ± 0.6 / 72.0 ± 0.7 | +0.1 | −1.9 |
+| AFEA-Net + layer mix + post-pool dropout | 73.8 | 73.7 ± 0.8 / 74.5 ± 0.8 / 74.3 ± 0.7 | −0.1 | 0.0 |
+
+**The ISA MLP structure has no effect.** Every difference is ≤ 0.1 WA, well inside seed noise. The internals do change, but the predictions do not:
+
+- With two independent MLPs, the gates differ more between streams (last layer W_wav / W_fil = 0.83 / 0.67 in the fixed model).
+- Without L_con, the ISE share of WavLM in layer 3 falls to 0.46.
+
+Accuracy and the Fbank-shuffle probe stay the same because the pooled Fbank vector carries almost no information that the classifier uses. Changing how AFEA combines it cannot help.
+
+Together with round 2, this removes the AFEA implementation as an explanation for the gap. The cause is upstream: the Fbank encoder is barely trained (modality imbalance), and the WavLM representation (layer choice) sets the absolute level.

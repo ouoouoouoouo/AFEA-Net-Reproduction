@@ -77,3 +77,16 @@ def test_inter_continuity_term_is_independent_of_afea_parameters():
     for l in range(4):
         expected = (out["s_wav"] - out["s_fil"]) / 2 ** (l + 1)
         assert torch.allclose(out["f_wav"][l] - out["f_fil"][l], expected, atol=1e-6)
+
+
+def test_isa_separate_mlps_are_independent_sigmoid_gates():
+    torch.manual_seed(0)
+    isa = InterSpeechAggregation(8, mlp="separate")
+    iw, if_ = torch.randn(4, 8), torch.randn(4, 8)
+    fused, w_wav, w_fil = isa(iw, if_)
+    assert torch.allclose(w_wav, torch.sigmoid(isa.mlp_wav(torch.cat([iw, if_], -1))))
+    assert torch.allclose(w_fil, torch.sigmoid(isa.mlp_fil(torch.cat([iw, if_], -1))))
+    assert torch.allclose(fused, w_wav * iw + w_fil * if_)
+    model = AFEANet(num_classes=4, lstm_hidden=8, isa_mlp="separate").eval()
+    out = model(torch.randn(2, 10, 1024), torch.tensor([10, 6]), torch.randn(2, 20, 40), torch.tensor([20, 9]))
+    assert out["logits"].shape == (2, 4)

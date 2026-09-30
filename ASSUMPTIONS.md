@@ -66,7 +66,7 @@ https://doi.org/10.3390/electronics14050844
 | M-7 | ISE weighting (Eq. 9) | CLARIFIED | **Stream-level softmax over the two scalars** `(G_wav, G_fil)`, so `A_wav + A_fil = 1` for each sample. |
 | M-8 | ISE excitation (Eq. 10–11) | CLARIFIED | `E_wav = A_wav·S_wav`, `E_fil = A_fil·S_fil`, then **cross-stream** `I_wav = S_wav + E_fil` and `I_fil = S_fil + E_wav`. |
 | M-9 | ISA gating (Eq. 12) | CLARIFIED | **Sigmoid, channel-wise** weights `W_wav, W_fil ∈ (0,1)^D`. This is not a softmax: the two weights are independent and do not sum to 1. |
-| M-10 | ISA MLP structure | ASSUMED | Eq. 12 writes `f_mlp` for both W_wav and W_fil but needs two different outputs. We use one MLP, `Linear(2D, H) → ReLU → Linear(H, 2D)`, and split its output into `[W_wav; W_fil]`. The default is H = D (set it with `--isa_hidden`). |
+| M-10 | ISA MLP structure | ASSUMED | Eq. 12 writes `f_mlp` for both W_wav and W_fil but needs two different outputs. We use one MLP, `Linear(2D, H) → ReLU → Linear(H, 2D)`, and split its output into `[W_wav; W_fil]`. The default is H = D (set it with `--isa_hidden`). `--isa_mlp separate` instead uses two independent MLPs, `Linear(2D, H) → ReLU → Linear(H, D)`, one per gate, as drawn in Fig. 3. |
 | M-11 | Fusion (Eq. 13) | PAPER | `F_fusion = W_wav·I_wav + W_fil·I_fil`. |
 | M-12 | Layer update (Eq. 14–15) | PAPER | `F^l_wav = (F^l_fusion + F^{l-1}_wav)/2` and `F^l_fil = (F^l_fusion + F^{l-1}_fil)/2`, with `F^0 = S̃`. |
 | M-13 | Number of AFEA layers | PAPER | **3** (best in Tables 4 and 6). Each layer has its own parameters (ASSUMED). |

@@ -76,6 +76,11 @@ def diagnosis_configs(dataset: str) -> List[Tuple[str, List[str], str]]:
         ("fix_afea_net", ["--dropout_pos", "post_pool", "--wavlm_layers", "all"], "afea_net"),
         ("fix_afea_net_l2c", ["--dropout_pos", "post_pool", "--wavlm_layers", "all", "--seal_norm", "l2c"],
          "afea_net"),
+        # 5. ISA with two independent MLPs instead of one shared MLP (Eq. 12 is ambiguous)
+        ("isa_sep_afea3_nocon", ["--afea_layers", "3", "--no_con", "--isa_mlp", "separate"], "afea3"),
+        ("isa_sep_afea_net", ["--isa_mlp", "separate"], "afea_net"),
+        ("isa_sep_fix_afea_net", ["--dropout_pos", "post_pool", "--wavlm_layers", "all", "--isa_mlp", "separate"],
+         "fix_afea_net"),
     ]
 
 

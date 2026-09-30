@@ -53,7 +53,7 @@ def build_model(cfg: Dict) -> nn.Module:
     if cfg["model"] == "afea":
         return AFEANet(cfg["num_classes"], FEAT_DIMS["wavlm"], FEAT_DIMS["fbank"],
                        num_afea_layers=cfg["afea_layers"], isa_hidden=cfg["isa_hidden"],
-                       wavlm_num_layers=n_layers, **common)
+                       isa_mlp=cfg.get("isa_mlp", "shared"), wavlm_num_layers=n_layers, **common)
     return SingleStreamNet(cfg["num_classes"], FEAT_DIMS[cfg["model"]],
                            wavlm_num_layers=n_layers if cfg["model"] == "wavlm" else 0, **common)
 

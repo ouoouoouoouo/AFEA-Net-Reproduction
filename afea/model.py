@@ -106,29 +106,43 @@ class InterSpeechAggregation(nn.Module):
     """ISA (Eq. 12-13): sigmoid feature-wise gating (NOT a softmax; W_wav and W_fil are
     independent values in (0, 1) per channel and need not sum to 1).
 
-    [W_wav; W_fil] = sigmoid(MLP([I_wav; I_fil])),  MLP = Linear(2D, H) -> ReLU -> Linear(H, 2D)
+    mlp="shared"   (default): [W_wav; W_fil] = sigmoid(MLP([I_wav; I_fil])),
+                   MLP = Linear(2D, H) -> ReLU -> Linear(H, 2D)   (one hidden layer for both gates)
+    mlp="separate": W_s = sigmoid(MLP_s([I_wav; I_fil])), MLP_s = Linear(2D, H) -> ReLU -> Linear(H, D)
+                   for s in {wav, fil}  (two independent branches, as drawn in Fig. 3)
     F_fusion = W_wav * I_wav + W_fil * I_fil
+    Eq. 12 writes f_mlp for both gates, so the paper does not settle which form is meant.
     """
 
-    def __init__(self, dim: int, hidden: Optional[int] = None):
+    def __init__(self, dim: int, hidden: Optional[int] = None, mlp: str = "shared"):
         super().__init__()
         hidden = hidden or dim
-        self.mlp = nn.Sequential(nn.Linear(2 * dim, hidden), nn.ReLU(inplace=True),
-                                 nn.Linear(hidden, 2 * dim))
+        self.mode = mlp
+        if mlp == "shared":
+            self.mlp = nn.Sequential(nn.Linear(2 * dim, hidden), nn.ReLU(inplace=True),
+                                     nn.Linear(hidden, 2 * dim))
+        elif mlp == "separate":
+            self.mlp_wav = nn.Sequential(nn.Linear(2 * dim, hidden), nn.ReLU(inplace=True), nn.Linear(hidden, dim))
+            self.mlp_fil = nn.Sequential(nn.Linear(2 * dim, hidden), nn.ReLU(inplace=True), nn.Linear(hidden, dim))
+        else:
+            raise ValueError(mlp)
 
     def forward(self, i_wav: torch.Tensor, i_fil: torch.Tensor):
-        w = torch.sigmoid(self.mlp(torch.cat([i_wav, i_fil], dim=-1)))              # [B, 2D]
-        w_wav, w_fil = w.chunk(2, dim=-1)
+        i_cat = torch.cat([i_wav, i_fil], dim=-1)                                   # [B, 2D]
+        if self.mode == "shared":
+            w_wav, w_fil = torch.sigmoid(self.mlp(i_cat)).chunk(2, dim=-1)
+        else:
+            w_wav, w_fil = torch.sigmoid(self.mlp_wav(i_cat)), torch.sigmoid(self.mlp_fil(i_cat))
         return w_wav * i_wav + w_fil * i_fil, w_wav, w_fil
 
 
 class AFEALayer(nn.Module):
     """One AFEA module: ISE -> ISA -> averaging with the layer inputs (Eq. 14-15)."""
 
-    def __init__(self, dim: int, isa_hidden: Optional[int] = None):
+    def __init__(self, dim: int, isa_hidden: Optional[int] = None, isa_mlp: str = "shared"):
         super().__init__()
         self.ise = InterSpeechExcitation(dim)
-        self.isa = InterSpeechAggregation(dim, isa_hidden)
+        self.isa = InterSpeechAggregation(dim, isa_hidden, isa_mlp)
 
     def forward(self, f_wav: torch.Tensor, f_fil: torch.Tensor):
         i_wav, i_fil, a = self.ise(f_wav, f_fil)
@@ -153,13 +167,13 @@ class AFEANet(nn.Module):
     def __init__(self, num_classes: int, wavlm_dim: int = 1024, fbank_dim: int = 40,
                  lstm_hidden: int = 256, lstm_dropout: float = 0.5, num_afea_layers: int = 3,
                  isa_hidden: Optional[int] = None, fcn_hidden: int = 512, fcn_dropout: float = 0.0,
-                 dropout_pos: str = "pre_pool", wavlm_num_layers: int = 0):
+                 dropout_pos: str = "pre_pool", wavlm_num_layers: int = 0, isa_mlp: str = "shared"):
         super().__init__()
         self.layer_mix = LayerMix(wavlm_num_layers) if wavlm_num_layers > 0 else None
         self.enc_wav = BiLSTMEncoder(wavlm_dim, lstm_hidden, lstm_dropout, dropout_pos)
         self.enc_fil = BiLSTMEncoder(fbank_dim, lstm_hidden, lstm_dropout, dropout_pos)
         dim = self.enc_wav.out_dim
-        self.afea = nn.ModuleList([AFEALayer(dim, isa_hidden) for _ in range(num_afea_layers)])
+        self.afea = nn.ModuleList([AFEALayer(dim, isa_hidden, isa_mlp) for _ in range(num_afea_layers)])
         cls_in = dim if num_afea_layers > 0 else 2 * dim
         self.classifier = make_classifier(cls_in, num_classes, fcn_hidden, fcn_dropout)
 

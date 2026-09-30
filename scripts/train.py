@@ -44,6 +44,8 @@ def parse_args():
                     help="per-direction hidden size; D = 2 * lstm_hidden")
     ap.add_argument("--lstm_dropout", type=float, default=d["lstm_dropout"])
     ap.add_argument("--isa_hidden", type=int, default=d["isa_hidden"])
+    ap.add_argument("--isa_mlp", choices=["shared", "separate"], default="shared",
+                    help="ISA gates from one shared MLP (default) or two independent MLPs")
     ap.add_argument("--fcn_hidden", type=int, default=d["fcn_hidden"])
     ap.add_argument("--fcn_dropout", type=float, default=d["fcn_dropout"])
     ap.add_argument("--val_ratio", type=float, default=d["val_ratio"])

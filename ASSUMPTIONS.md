@@ -84,8 +84,11 @@ https://doi.org/10.3390/electronics14050844
 | L-4 | SEAL distance | PAPER / ASSUMED | Both embeddings are L2-normalised ("normalize them"). `D_ij` is the **plain (not squared)** Euclidean distance, as Eq. 5 writes it. A `1e-12` term inside the square root keeps the gradient finite. |
 | L-5 | SEAL normaliser | PAPER | `N = B²`, the number of pairs. |
 | L-6 | SEAL input | PAPER | The pooled BiLSTM outputs `S̃_wav` and `S̃_fil`, before any AFEA layer. |
+| L-6b | Scope of SEAL | PAPER / CLARIFIED | SEAL is **cross-stream only**. It compares WavLM_i with Fbank_j. There is **no** within-stream term (WavLM_i ↔ WavLM_j, or Fbank_i ↔ Fbank_j). A same-label pair counts as positive even when i ≠ j (different utterances). Any clustering within one stream can only happen indirectly, when two same-emotion WavLM embeddings are both pulled toward the same Fbank embeddings. |
+| L-6c | Range of the SEAL distance | CLARIFIED | The pooled features are non-negative during training, so after L2 normalisation D_ij ≤ √2. With margin ≥ √2 (RAVDESS uses 1.5), the negative hinge is never inactive: it pushes every cross-stream pair apart instead of stopping at the margin. See RESULTS.md, round 2. |
 | L-7 | margin | PAPER | 1.0 for IEMOCAP, 1.5 for RAVDESS. |
 | L-8 | Continuity (Eq. 19–24) | PAPER | Per layer: `MSE(F^l_wav, S̃_wav) + MSE(F^l_fil, S̃_fil)` (intra) plus `MSE(F^l_wav, F^l_fil)` (inter). The three layers are weighted by α, β, γ. |
+| L-8b | Meaning of "intra-speech" | CLARIFIED | The intra-speech term keeps each stream's fused feature close to that stream's own input: `MSE(F^l_wav, S̃_wav) + MSE(F^l_fil, S̃_fil)`. It is **not** an emotion alignment within a stream and does not use labels. The inter-speech term simplifies to `MSE(S̃_wav, S̃_fil) / 4^l`, which is independent of the AFEA parameters (tested in `tests/test_model.py`). |
 | L-9 | α, β, γ | PAPER | (0.8, 0.5, 0.2) for IEMOCAP and (0.3, 0.2, 0.1) for RAVDESS. |
 | L-10 | Gradient through S̃ in L_con | ASSUMED | Not detached: gradients reach the encoders through both arguments. |
 

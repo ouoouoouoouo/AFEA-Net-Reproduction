@@ -49,7 +49,9 @@ def parse_args():
     ap.add_argument("--fcn_hidden", type=int, default=d["fcn_hidden"])
     ap.add_argument("--fcn_dropout", type=float, default=d["fcn_dropout"])
     ap.add_argument("--val_ratio", type=float, default=d["val_ratio"])
-    ap.add_argument("--select", choices=["val", "last"], default=d["select"])
+    ap.add_argument("--select", choices=["val", "last", "test"], default=d["select"],
+                    help="val: best validation epoch (unbiased); last: final epoch; test: best test-UAR "
+                         "epoch (common IEMOCAP practice, optimistic - report it as such)")
     ap.add_argument("--select_metric", choices=["uar_wa", "uar"], default="uar_wa",
                     help="validation score used to pick the epoch")
     ap.add_argument("--seeds", type=int, nargs="+", default=[d["seed"]])

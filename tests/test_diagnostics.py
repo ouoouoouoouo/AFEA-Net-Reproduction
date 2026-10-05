@@ -148,3 +148,15 @@ def test_uar_selection_and_oracle_are_recorded(tmp_path):
     assert set(res["oracle_test"]) == {"epoch", "WA", "UAR"}
     assert res["oracle_test"]["UAR"] >= max(h["mon_test_UAR"] for h in res["history"]) - 1e-12
     assert "oracle_fold_mean (test-selected epoch, optimistic)" in s
+
+
+def test_select_test_picks_best_test_uar_epoch(tmp_path):
+    rows = _synthetic(tmp_path)
+    import json
+    run_cv(rows, _cfg(tmp_path, select="test", val_ratio=0, epochs=3, diag=False), folds=[1], device="cpu",
+           out_dir=str(tmp_path / "t"))
+    res = json.load(open(tmp_path / "t" / "fold1_seed42.json"))
+    best = max(res["history"], key=lambda h: h["mon_test_UAR"])
+    assert res["selected_epoch"] == best["epoch"]
+    assert abs(res["test"]["UAR"] - best["mon_test_UAR"]) < 1e-9
+    assert res["n_val"] == 0

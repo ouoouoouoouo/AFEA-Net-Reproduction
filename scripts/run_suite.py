@@ -22,7 +22,8 @@ import time
 
 import _path  # noqa: F401
 
-from afea.suite import ablation_configs, diagnosis_configs, protocol_configs, sweep_configs, variant_configs
+from afea.suite import (ablation_configs, diagnosis_configs, protocol_configs, sweep_configs, testsel_configs,
+                        variant_configs)
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
@@ -43,6 +44,14 @@ def build_jobs(args):
             jobs += [(d, n, s, a) for s in args.seeds for d in datasets for n, a in variant_configs(d)]
         elif tier == "sweeps":
             jobs += [(d, n, first, a) for d in datasets for n, a in sweep_configs(d)]
+        elif tier == "testsel":
+            for d in datasets:
+                has_all = os.path.isdir(os.path.join(ROOT, "features", d, "wavlm_all"))
+                for n, a, _ in testsel_configs(d):
+                    if "all" in a and not has_all:
+                        print(f"WARNING: features/{d}/wavlm_all missing, skipping {d}/{n}")
+                        continue
+                    jobs += [(d, n, s, a) for s in args.diag_seeds]
         elif tier == "protocol":
             for d in datasets:
                 for n, a, _ in protocol_configs(d):
@@ -89,7 +98,7 @@ def main():
     ap.add_argument("--datasets", nargs="+", default=["iemocap", "ravdess"])
     ap.add_argument("--seeds", type=int, nargs="+", default=[42, 1, 2, 3, 4])
     ap.add_argument("--tiers", nargs="+", default=["main", "seeds", "variants", "sweeps"],
-                    choices=["main", "seeds", "variants", "sweeps", "diag", "protocol"])
+                    choices=["main", "seeds", "variants", "sweeps", "diag", "protocol", "testsel"])
     ap.add_argument("--diag_seeds", type=int, nargs="+", default=[42, 1, 2])
     ap.add_argument("--stop_after_hours", type=float, default=None,
                     help="do not START new jobs after this many hours (running jobs finish)")

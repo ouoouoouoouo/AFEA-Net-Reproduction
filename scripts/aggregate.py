@@ -12,7 +12,7 @@ import _path  # noqa: F401
 import numpy as np
 
 from afea.suite import (PAPER, PAPER_ROW_NAMES, ablation_configs, diagnosis_configs, protocol_configs,
-                        sweep_configs, variant_configs)
+                        sweep_configs, testsel_configs, variant_configs)
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 KEYS = ("WA", "UAR", "P", "F1")
@@ -92,6 +92,25 @@ def protocol_table(ds):
     return lines
 
 
+def testsel_table(ds):
+    lines = ["| config | seeds | WA | UAR | F1 | same config, unbiased selection (WA, same seeds) | gain from test selection |",
+             "|---|---|---|---|---|---|---|"]
+    for name, args, ref in testsel_configs(ds):
+        runs = load(ds, name)
+        if not runs:
+            continue
+        ref_runs = {s: v for s, v in load(ds, ref).items() if s in runs}
+        if ref_runs:
+            rw = np.mean([v["WA"] for v in ref_runs.values()]) * 100
+            ow = np.mean([runs[s]["WA"] for s in ref_runs]) * 100
+            ref_txt, delta = f"{rw:.1f} ({ref})", f"{ow - rw:+.1f}"
+        else:
+            ref_txt, delta = f"– ({ref})", "–"
+        lines.append(f"| {name} | {len(runs)} | {fmt(runs, 'WA')} | {fmt(runs, 'UAR')} | {fmt(runs, 'F1')} | "
+                     f"{ref_txt} | {delta} |")
+    return lines
+
+
 def main():
     out = ["# Reproduction results", "",
            "Values are % (mean ± std over seeds of the 5-fold mean). Protocol: see ASSUMPTIONS.md.", ""]
@@ -109,6 +128,10 @@ def main():
                 "`p_*` = original features, `pn_*` = official waveform layer-norm before WavLM. "
                 "Oracle = epoch chosen on the test fold (optimistic, for reference only).", ""]
         out += protocol_table(ds) + [""]
+        if any(load(ds, n) for n, _, _ in testsel_configs(ds)):
+            out += ["### 'valid = test' protocol (train on all training folds, epoch with best UAR on the "
+                    "held-out fold; optimistic, common in IEMOCAP papers)", ""]
+            out += testsel_table(ds) + [""]
     text = "\n".join(out)
     print(text)
     with open(os.path.join(ROOT, "runs", "results.md"), "w") as f:

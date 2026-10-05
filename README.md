@@ -198,6 +198,14 @@ The protocol tier follows the paper setting as closely as possible:
 - `p_*` runs use the original features. `pn_*` runs use features extracted with the official waveform layer-norm.
 - Each run also reports the optimistic "oracle" number, where the epoch is chosen on the test fold. This bounds how much of the gap could come from model selection.
 
+### "valid = test" protocol
+
+```bash
+python scripts/run_suite.py --gpus 0 1 2 3 --tiers testsel --datasets iemocap --diag_seeds 42 1 2
+```
+
+This protocol trains on all training sessions and reports the epoch with the best UAR on the held-out session. Many IEMOCAP papers use this setting, which is probably how the paper's numbers were obtained. Because the epoch is tuned on the test session, the result is optimistically biased. `runs/results.md` therefore lists each `t_*` result next to the same configuration with unbiased selection, together with the gain that comes from test selection.
+
 ### Weights & Biases
 
 W&B logging is off by default. To use it, run `pip install wandb`, then `wandb login`, then pass `--wandb <project>`. Each `train.py` call creates one W&B run. The run name defaults to the basename of `--out`. Per-epoch curves are logged under `fold{k}_s{seed}/...`. The test metrics and the `fold_mean/*`, `fold_std/*` and `pooled/*` values are stored in the run summary. If the compute nodes have no internet access, set `WANDB_MODE=offline` and upload the runs later with `wandb sync wandb/offline-run-*`.

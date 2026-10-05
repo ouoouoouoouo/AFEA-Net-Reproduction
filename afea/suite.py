@@ -99,6 +99,25 @@ def protocol_configs(dataset: str) -> List[Tuple[str, List[str], str]]:
     return out
 
 
+def testsel_configs(dataset: str) -> List[Tuple[str, List[str], str]]:
+    """'valid = test' protocol: train on all training folds (no validation split) and report the
+    epoch with the best UAR on the held-out fold. Widespread in IEMOCAP papers but optimistically
+    biased; results are reported separately from the unbiased runs."""
+    t = ["--select", "test", "--val_ratio", "0"]
+    fix = ["--dropout_pos", "post_pool", "--wavlm_layers", "all"]
+    return [
+        ("t_fbank", ["--model", "fbank"] + t, "fbank"),
+        ("t_wavlm", ["--model", "wavlm"] + t, "wavlm"),
+        ("t_wo_align", ["--no_align"] + t, "wo_align"),
+        ("t_wo_afea", ["--afea_layers", "0"] + t, "wo_afea"),
+        ("t_afea3_nocon", ["--afea_layers", "3", "--no_con"] + t, "afea3"),
+        ("t_afea_net", t, "afea_net"),
+        ("t_fix_wavlm", ["--model", "wavlm"] + fix + t, "fix_wavlm"),
+        ("t_fix_wo_afea", ["--afea_layers", "0"] + fix + t, "fix_wo_afea"),
+        ("t_fix_afea_net", fix + t, "fix_afea_net"),
+    ]
+
+
 # Tables 4 and 6 of the paper: (WA, UAR, P, F1)
 PAPER = {
     "iemocap": {

@@ -205,18 +205,21 @@ def train_fold(rows: List[Dict], test_fold: int, cfg: Dict, seed: int, device, l
             score = vm["UAR"] if cfg.get("select_metric", "uar_wa") == "uar" else vm["UAR"] + vm["WA"]
             if cfg["select"] == "val" and score > best_score:
                 best_score, best_state, best_epoch = score, copy.deepcopy(model.state_dict()), epoch
-        if diag:
-            # Monitoring only: the test fold is NEVER used for selection. Logged so that the
-            # optimistic "best epoch chosen on the test fold" number can be reported separately
-            # and the effect of the selection protocol can be quantified.
+        if diag or cfg["select"] == "test":
+            # With --select val/last this is monitoring only (the test fold is never used for
+            # selection); it lets the optimistic "best epoch on the test fold" number be reported
+            # separately. With --select test (common but optimistic IEMOCAP practice: train on 4
+            # sessions, pick the epoch with the best UAR on the held-out session) it IS the selection.
             tm, _, _ = evaluate(model, test_loader, cfg, device)
             rec.update({"mon_test_WA": tm["WA"], "mon_test_UAR": tm["UAR"]})
+            if cfg["select"] == "test" and tm["UAR"] > best_score:
+                best_score, best_state, best_epoch = tm["UAR"], copy.deepcopy(model.state_dict()), epoch
         history.append(rec)
         if wandb_run is not None:
             wandb_run.log({f"{prefix}/{k}": v for k, v in rec.items()})
         log(f"  fold {test_fold} seed {seed} ep {epoch:3d} " +
             " ".join(f"{k}={v:.4f}" for k, v in rec.items() if k != "epoch" and not k.startswith("diag/")))
-    if cfg["select"] == "val" and best_state is not None:
+    if cfg["select"] in ("val", "test") and best_state is not None:
         model.load_state_dict(best_state)
     else:
         best_epoch = cfg["epochs"]

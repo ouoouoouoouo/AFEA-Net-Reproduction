@@ -186,3 +186,76 @@ Eq. 12 writes `f_mlp` for both ISA gates, while Fig. 3 draws two separate branch
 Accuracy and the Fbank-shuffle probe stay the same because the pooled Fbank vector carries almost no information that the classifier uses. Changing how AFEA combines it cannot help.
 
 Together with round 2, this removes the AFEA implementation as an explanation for the gap. The cause is upstream: the Fbank encoder is barely trained (modality imbalance), and the WavLM representation (layer choice) sets the absolute level.
+
+---
+
+# Round 3: protocol checks and the "valid = test" protocol
+
+Each configuration was run with 3 seeds (42, 1, 2), and the results were exported from W&B with `scripts/wandb_export.py`.
+
+## Waveform normalisation and UAR-only selection have no effect
+
+| Model (IEMOCAP) | original | UAR-only selection (`p_`) | + official waveform layer-norm (`pn_`) |
+|---|---|---|---|
+| WavLM | 71.4 | 71.3 | 71.5 |
+| w/o AFEA | 71.4 | 71.8 | 71.2 |
+| w/o L_ali | – | 71.7 | 71.9 |
+| AFEA-Net | 71.3 | 71.5 | 71.1 |
+
+RAVDESS behaves the same way: WavLM is 72.2 with `p_` and 72.5 with `pn_`; AFEA-Net is 72.4 and 72.3. Every difference is ≤ 0.6 WA, which is inside seed noise. Neither waveform normalisation nor the selection metric explains the gap.
+
+## IEMOCAP with "valid = test"
+
+This protocol trains on all four training sessions and reports the epoch with the best UAR on the held-out session.
+
+| Setting | WA | UAR | Paper WA / UAR | ΔWA vs paper | Gain from test selection |
+|---|---|---|---|---|---|
+| Fbank | 56.5 ± 0.5 | 58.2 | 56.2 / 56.3 | **+0.3** | +1.5 |
+| WavLM | 73.0 ± 0.3 | 74.6 | 72.8 / 72.8 | **+0.2** | +1.6 |
+| w/o AFEA (concat) | 74.0 ± 0.5 | 75.0 | 73.9 / 73.7 | **+0.1** | +2.6 |
+| w/o L_ali | 73.6 ± 0.3 | 74.4 | 74.0 / 73.9 | **−0.4** | +2.0 |
+| AFEA-3 (no L_con) | 72.2 ± 0.4 | 73.5 | 74.6 / 74.9 | **−2.4** | +2.3 |
+| AFEA-Net | 73.0 ± 0.3 | 74.1 | 75.1 / 75.3 | **−2.1** | +1.7 |
+| WavLM, layer mix + post-pool dropout | 76.6 ± 0.1 | 77.6 | – | – | +3.2 |
+| concat, layer mix + post-pool dropout | 76.1 ± 0.2 | 77.1 | – | – | +2.0 |
+| AFEA-Net, layer mix + post-pool dropout | 76.6 ± 0.4 | 77.9 | – | – | +2.8 |
+
+The gain from test selection is measured against the same configuration with validation-based selection, on the same seeds.
+
+**Findings**
+
+1. **Most of the paper's IEMOCAP table matches this protocol.** With the final WavLM layer and the epoch chosen on the test session, the Fbank, WavLM, concat and w/o L_ali rows land within 0.4 WA of the paper. Choosing the epoch on the test session adds 1.5–2.6 WA. This is strong (though not conclusive) evidence that the paper used test-session selection. Our UAR is 1–2 points above the paper's, which is consistent with selecting on UAR; the paper may have selected on WA instead.
+2. **The dual-stream gain now reproduces.** Concat − WavLM is +1.0 WA for us and +1.1 in the paper. Under unbiased selection the same comparison gave 0.0. Caution: a run whose accuracy fluctuates more from epoch to epoch benefits more from picking its best epoch, so part of this gain may come from the selection itself rather than from Fbank.
+3. **AFEA and SEAL remain the only rows that do not reproduce.**
+
+   | Comparison | Paper | Ours |
+   |---|---|---|
+   | AFEA-3 − concat | +0.7 | −1.8 |
+   | full − w/o L_ali (the SEAL contribution) | +1.1 | −0.6 |
+   | AFEA-Net − WavLM | +2.3 | 0.0 |
+
+   Under the paper's protocol, the entire remaining gap (−2.1 WA for AFEA-Net) sits in the two components this paper proposes.
+4. **A stronger WavLM front end beats the paper under the same protocol.** With the layer-weighted sum, WavLM alone reaches 76.6 WA / 77.6 UAR, above the paper's AFEA-Net (75.1 / 75.3). Adding AFEA-Net brings no further gain (76.6).
+
+## RAVDESS with "valid = test"
+
+| Setting | WA | UAR | Paper WA / UAR | ΔWA vs paper | Gain from test selection |
+|---|---|---|---|---|---|
+| Fbank | 56.8 ± 0.3 | 56.5 | 48.4 / 46.5 | +8.4 | +8.2 |
+| WavLM | 75.0 ± 0.1 | 75.1 | 77.1 / 77.0 | −2.1 | +2.9 |
+| w/o L_ali | 76.6 ± 1.2 | 76.6 | 78.4 / 78.4 | −1.8 | +2.8 |
+| w/o AFEA | 75.0 ± 0.2 | 75.0 | 78.2 / 78.0 | −3.2 | +3.5 |
+| AFEA-3 (no L_con) | 73.3 ± 1.3 | 73.5 | 79.5 / 79.6 | −6.2 | +4.0 |
+| AFEA-Net | 74.7 ± 0.3 | 75.0 | 80.3 / 80.6 | −5.6 | +2.9 |
+
+RAVDESS does not match either protocol. The paper's Fbank row matches our *unbiased* number (48.3) almost exactly, while the paper's WavLM row is 2.1 above our *test-selected* number. RAVDESS test folds are small (about 288 utterances), so test selection gains a lot (3–8 WA). The paper's RAVDESS split is unknown: it may be actor-dependent, or use different fold sizes. AFEA and SEAL again reduce accuracy here, as on IEMOCAP.
+
+## Updated picture
+
+| Question | Answer from our runs |
+|---|---|
+| Why are our absolute IEMOCAP numbers about 2 WA lower than the paper's? | Mostly epoch selection on the test session (+1.5–2.6). Under that protocol, the single-stream and concat rows reproduce. |
+| Is it the WavLM layer? | The paper's numbers match the **final** layer. A layer mix is +2–3 WA better for every model. |
+| Is it waveform normalisation or the selection metric? | No (≤ 0.6 WA). |
+| Do AFEA and SEAL help? | Not in any protocol we tried: −1.8 and −0.6 WA under the paper's likely protocol, against +0.7 and +1.1 in the paper. |
+| RAVDESS | Not reproduced under either protocol. The split is probably different. |

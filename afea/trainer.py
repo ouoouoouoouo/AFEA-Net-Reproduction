@@ -21,6 +21,15 @@ from .model import AFEANet, SingleStreamNet
 FEAT_DIMS = {"wavlm": 1024, "fbank": 40}
 
 
+def selection_score(m: Dict[str, float], metric: str) -> float:
+    """Score used to pick the epoch: "uar", "wa" or "uar_wa" (sum)."""
+    if metric == "uar":
+        return m["UAR"]
+    if metric == "wa":
+        return m["WA"]
+    return m["UAR"] + m["WA"]
+
+
 def set_seed(seed: int) -> None:
     random.seed(seed)
     np.random.seed(seed)
@@ -202,7 +211,7 @@ def train_fold(rows: List[Dict], test_fold: int, cfg: Dict, seed: int, device, l
         if val_loader is not None:
             vm, _, _ = evaluate(model, val_loader, cfg, device, probes=diag)
             rec.update({"val_" + k: v for k, v in vm.items()})
-            score = vm["UAR"] if cfg.get("select_metric", "uar_wa") == "uar" else vm["UAR"] + vm["WA"]
+            score = selection_score(vm, cfg.get("select_metric", "uar_wa"))
             if cfg["select"] == "val" and score > best_score:
                 best_score, best_state, best_epoch = score, copy.deepcopy(model.state_dict()), epoch
         if diag or cfg["select"] == "test":
@@ -212,8 +221,11 @@ def train_fold(rows: List[Dict], test_fold: int, cfg: Dict, seed: int, device, l
             # sessions, pick the epoch with the best UAR on the held-out session) it IS the selection.
             tm, _, _ = evaluate(model, test_loader, cfg, device)
             rec.update({"mon_test_WA": tm["WA"], "mon_test_UAR": tm["UAR"]})
-            if cfg["select"] == "test" and tm["UAR"] > best_score:
-                best_score, best_state, best_epoch = tm["UAR"], copy.deepcopy(model.state_dict()), epoch
+            if cfg["select"] == "test":
+                # the first t_* runs selected on test UAR; --select_metric now chooses (default uar)
+                tscore = selection_score(tm, cfg.get("test_select_metric") or "uar")
+                if tscore > best_score:
+                    best_score, best_state, best_epoch = tscore, copy.deepcopy(model.state_dict()), epoch
         history.append(rec)
         if wandb_run is not None:
             wandb_run.log({f"{prefix}/{k}": v for k, v in rec.items()})

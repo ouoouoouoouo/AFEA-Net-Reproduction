@@ -21,11 +21,13 @@ from collections import defaultdict
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import numpy as np  # noqa: E402
 
+from afea.report import PROTOCOLS, paper_table, stats_from_runs  # noqa: E402
 from afea.suite import (PAPER, ablation_configs, diagnosis_configs, protocol_configs,  # noqa: E402
-                        testsel_configs, variant_configs)
+                        testsel_configs, testsel_wa_configs, variant_configs)
 
 NAME_RE = re.compile(r"^(iemocap|ravdess)_(.+)_s(\d+)$")
-KEYS = ("WA", "UAR", "F1")
+KEYS = ("WA", "UAR", "F1")            # columns of the overview tables
+ALL_KEYS = ("WA", "UAR", "P", "F1")   # collected; the paper-style tables use all four
 
 
 def oracle_from_history(run, folds=range(1, 6)):
@@ -58,7 +60,7 @@ def collect(runs, want_oracle):
         if "fold_mean/WA" not in summ:  # crashed / unfinished run
             continue
         ds, cfg, seed = m.group(1), m.group(2), int(m.group(3))
-        rec = {k: float(summ[f"fold_mean/{k}"]) for k in KEYS if f"fold_mean/{k}" in summ}
+        rec = {k: float(summ[f"fold_mean/{k}"]) for k in ALL_KEYS if f"fold_mean/{k}" in summ}
         rec["oracle"] = None
         if want_oracle(cfg):
             done += 1
@@ -115,24 +117,31 @@ def tables(data):
                 lines.append(row(n, cfgs[n], o))
             lines.append("")
 
-        present = [(n, ref) for n, _, ref in testsel_configs(ds) if n in cfgs]
-        if present:
-            lines += ["### 'valid = test' (train on all training folds, epoch with best test UAR; optimistic)", "",
-                      "| config | seeds | WA | UAR | F1 | unbiased same config (WA, same seeds) | gain | paper WA / UAR |",
-                      "|---|---|---|---|---|---|---|---|"]
-            for n, ref in present:
-                runs = cfgs[n]
-                ref_runs = {s: v for s, v in cfgs.get(ref, {}).items() if s in runs}
-                if ref_runs:
-                    rw = np.mean([v["WA"] for v in ref_runs.values()]) * 100
-                    ow = np.mean([runs[s]["WA"] for s in ref_runs]) * 100
-                    ref_txt, gain = f"{rw:.1f} ({ref})", f"{ow - rw:+.1f}"
-                else:
-                    ref_txt, gain = f"– ({ref})", "–"
-                p = PAPER.get(ds, {}).get(ref)
-                ptxt = f"{p[0]*100:.1f} / {p[1]*100:.1f}" if p else ""
-                lines.append(row(n, runs, f" | {ref_txt} | {gain} | {ptxt}"))
-            lines.append("")
+        for cfg_fn, crit in ((testsel_configs, "UAR"), (testsel_wa_configs, "WA")):
+            lines += testsel_section(cfgs, ds, cfg_fn, crit)
+    return lines
+
+
+def testsel_section(cfgs, ds, cfg_fn, crit):
+    present = [(n, ref) for n, _, ref in cfg_fn(ds) if n in cfgs]
+    if not present:
+        return []
+    lines = [f"### 'valid = test' (train on all training folds, epoch with best test {crit}; optimistic)", "",
+             "| config | seeds | WA | UAR | F1 | unbiased same config (WA, same seeds) | gain | paper WA / UAR |",
+             "|---|---|---|---|---|---|---|---|"]
+    for n, ref in present:
+        runs = cfgs[n]
+        ref_runs = {s: v for s, v in cfgs.get(ref, {}).items() if s in runs}
+        if ref_runs:
+            rw = np.mean([v["WA"] for v in ref_runs.values()]) * 100
+            ow = np.mean([runs[s]["WA"] for s in ref_runs]) * 100
+            ref_txt, gain = f"{rw:.1f} ({ref})", f"{ow - rw:+.1f}"
+        else:
+            ref_txt, gain = f"– ({ref})", "–"
+        p = PAPER.get(ds, {}).get(ref)
+        ptxt = f"{p[0]*100:.1f} / {p[1]*100:.1f}" if p else ""
+        lines.append(row(n, runs, f" | {ref_txt} | {gain} | {ptxt}"))
+    lines.append("")
     return lines
 
 
@@ -142,6 +151,9 @@ def main():
     ap.add_argument("--out", default="wandb_results.md")
     ap.add_argument("--runs", action="store_true", help="also list every run name and state")
     ap.add_argument("--no_oracle", action="store_true", help="skip history scans (faster)")
+    ap.add_argument("--paper_table", nargs="+", default=[], choices=sorted(PROTOCOLS),
+                    help="also write Repro-vs-Paper tables like Table 4/6 for these protocols: unbiased, "
+                         "t (test-UAR selection), tw (test-WA selection); LaTeX goes to paper_tables.tex")
     args = ap.parse_args()
 
     import wandb
@@ -158,8 +170,19 @@ def main():
 
     want_oracle = (lambda cfg: False) if args.no_oracle else (lambda cfg: cfg.startswith(("p_", "pn_")))
     data = collect(runs, want_oracle)
-    text = "\n".join(["# Results exported from W&B", f"Project: `{args.project}`", ""] + tables(data))
-    with open(args.out, "w") as f:
+    md_extra, tex_all = [], []
+    for proto in args.paper_table:
+        for ds in ("iemocap", "ravdess"):
+            md, tex = paper_table(stats_from_runs(data.get(ds, {}), PROTOCOLS[proto][0]), ds, proto)
+            md_extra += md
+            if tex:
+                tex_all.append(tex)
+    if tex_all:
+        with open("paper_tables.tex", "w", encoding="utf-8") as f:
+            f.write("% requires \\usepackage{booktabs}\n\n" + "\n\n".join(tex_all) + "\n")
+        print("-> paper_tables.tex")
+    text = "\n".join(["# Results exported from W&B", f"Project: `{args.project}`", ""] + md_extra + tables(data))
+    with open(args.out, "w", encoding="utf-8") as f:
         f.write(text + "\n")
     print(text)
     print(f"\n-> {args.out}")

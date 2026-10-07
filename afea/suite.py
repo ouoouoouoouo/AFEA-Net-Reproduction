@@ -118,6 +118,13 @@ def testsel_configs(dataset: str) -> List[Tuple[str, List[str], str]]:
     ]
 
 
+def testsel_wa_configs(dataset: str) -> List[Tuple[str, List[str], str]]:
+    """All Table 4/6 ablation rows under 'valid = test' with the epoch picked by the best test WA
+    (tw_<name>); the reference is the same row with unbiased validation-based selection."""
+    t = ["--select", "test", "--val_ratio", "0", "--test_select_metric", "wa"]
+    return [(f"tw_{n}", a + t, n) for n, a in ablation_configs(dataset)]
+
+
 # Tables 4 and 6 of the paper: (WA, UAR, P, F1)
 PAPER = {
     "iemocap": {

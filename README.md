@@ -206,6 +206,21 @@ python scripts/run_suite.py --gpus 0 1 2 3 --tiers testsel --datasets iemocap --
 
 This protocol trains on all training sessions and reports the epoch with the best UAR on the held-out session. Many IEMOCAP papers use this setting, which is probably how the paper's numbers were obtained. Because the epoch is tuned on the test session, the result is optimistically biased. `runs/results.md` therefore lists each `t_*` result next to the same configuration with unbiased selection, together with the gain that comes from test selection.
 
+### Paper-style tables (Table 4/6 layout)
+
+```bash
+python scripts/run_suite.py --gpus 0 1 2 3 --jobs_per_gpu 2 --tiers testsel_wa --datasets iemocap --seeds 42 1 2 3 4
+python scripts/wandb_export.py --project <entity>/afea-net --no_oracle --paper_table unbiased t tw
+```
+
+The `testsel_wa` tier runs all 12 ablation rows (`tw_*`) under the "valid = test" protocol, with the epoch chosen by the best test WA. `--paper_table` adds one "reproduction vs. paper" table per protocol to the Markdown output. Each table reports WA, UAR, P and F1 as mean ± std, with the best value in each column in bold. The LaTeX version is written to `paper_tables.tex` (requires `booktabs`).
+
+| Protocol | Runs | How the epoch is chosen |
+|---|---|---|
+| `unbiased` | original | on a validation split of the training sessions |
+| `t` | `t_*` | best test UAR |
+| `tw` | `tw_*` | best test WA |
+
 ### Weights & Biases
 
 W&B logging is off by default. To use it, run `pip install wandb`, then `wandb login`, then pass `--wandb <project>`. Each `train.py` call creates one W&B run. The run name defaults to the basename of `--out`. Per-epoch curves are logged under `fold{k}_s{seed}/...`. The test metrics and the `fold_mean/*`, `fold_std/*` and `pooled/*` values are stored in the run summary. If the compute nodes have no internet access, set `WANDB_MODE=offline` and upload the runs later with `wandb sync wandb/offline-run-*`.

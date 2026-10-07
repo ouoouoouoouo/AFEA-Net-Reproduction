@@ -11,9 +11,8 @@ class FakeRun:
     def __init__(self, name, summary, history=None, state="finished"):
         self.name, self.summary, self.state, self._h = name, summary, state, history or {}
 
-    def scan_history(self, keys):
-        rows = self._h.get(keys[0].split("/")[0], [])
-        return [r for r in rows if all(k in r for k in keys)]
+    def history(self, keys, samples, pandas):
+        return list(self._h.get(keys[0].split("/")[0], []))
 
 
 def _summ(wa):

@@ -34,7 +34,9 @@ def oracle_from_history(run, folds=range(1, 6)):
     was, uars = [], []
     for k in folds:
         prefix = f"fold{k}_s{seed}"
-        rows = [r for r in run.scan_history(keys=[f"{prefix}/mon_test_UAR", f"{prefix}/mon_test_WA"])]
+        keys = [f"{prefix}/mon_test_UAR", f"{prefix}/mon_test_WA"]
+        # one sampled request per fold (50 epochs << samples), much faster than scan_history
+        rows = [r for r in run.history(keys=keys, samples=10000, pandas=False) if all(k in r for k in keys)]
         if not rows:
             return None
         best = max(rows, key=lambda r: r[f"{prefix}/mon_test_UAR"])
@@ -46,6 +48,8 @@ def oracle_from_history(run, folds=range(1, 6)):
 def collect(runs, want_oracle):
     """-> {dataset: {config: {seed: {"WA":..,"UAR":..,"F1":.., "oracle": {...}|None}}}}"""
     out = defaultdict(lambda: defaultdict(dict))
+    todo = [r for r in runs if NAME_RE.match(r.name or "") and want_oracle(NAME_RE.match(r.name).group(2))]
+    done = 0
     for run in runs:
         m = NAME_RE.match(run.name or "")
         if not m:
@@ -55,7 +59,11 @@ def collect(runs, want_oracle):
             continue
         ds, cfg, seed = m.group(1), m.group(2), int(m.group(3))
         rec = {k: float(summ[f"fold_mean/{k}"]) for k in KEYS if f"fold_mean/{k}" in summ}
-        rec["oracle"] = oracle_from_history(run) if want_oracle(cfg) else None
+        rec["oracle"] = None
+        if want_oracle(cfg):
+            done += 1
+            print(f"  oracle {done}/{len(todo)}: {run.name}", flush=True)
+            rec["oracle"] = oracle_from_history(run)
         out[ds][cfg][seed] = rec
     return out
 

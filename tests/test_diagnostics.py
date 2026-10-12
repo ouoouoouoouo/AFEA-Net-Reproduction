@@ -182,8 +182,10 @@ def test_pooled_layernorm_centres_streams_and_lifts_sqrt2_cap():
     for s in (out["s_wav"], out["s_fil"]):
         assert torch.allclose(s.mean(-1), torch.zeros(8), atol=1e-5)
         assert (s < 0).any()                    # no longer non-negative after max pooling
-    y = torch.tensor([0, 1, 2, 3, 0, 1, 2, 3])
-    assert seal_stats(out["s_wav"], out["s_fil"], y)["seal_neg_dist"] > 2 ** 0.5
+    # non-negative unit vectors are at most sqrt(2) apart; centred ones are not (the mean distance
+    # stays ~sqrt(2) for random vectors, so check that some pair exceeds the cap)
+    unit = [torch.nn.functional.normalize(s, dim=-1) for s in (out["s_wav"], out["s_fil"])]
+    assert torch.cdist(*unit).max() > 2 ** 0.5
 
 
 def test_featnorm_variants_train(tmp_path):

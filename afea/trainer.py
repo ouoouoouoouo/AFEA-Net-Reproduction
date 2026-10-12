@@ -13,7 +13,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 from torch.utils.data import DataLoader
 
-from .dataset import DualStreamFeatureDataset, collate_dual
+from .dataset import DualStreamFeatureDataset, collate_dual, compute_norm_stats
 from .losses import continuity_loss, seal_loss, seal_stats
 from .metrics import compute_metrics, confusion
 from .model import AFEANet, SingleStreamNet
@@ -62,7 +62,8 @@ def build_model(cfg: Dict) -> nn.Module:
     if cfg["model"] == "afea":
         return AFEANet(cfg["num_classes"], FEAT_DIMS["wavlm"], FEAT_DIMS["fbank"],
                        num_afea_layers=cfg["afea_layers"], isa_hidden=cfg["isa_hidden"],
-                       isa_mlp=cfg.get("isa_mlp", "shared"), wavlm_num_layers=n_layers, **common)
+                       isa_mlp=cfg.get("isa_mlp", "shared"), wavlm_num_layers=n_layers,
+                       pooled_norm=cfg.get("pooled_norm", "none"), **common)
     return SingleStreamNet(cfg["num_classes"], FEAT_DIMS[cfg["model"]],
                            wavlm_num_layers=n_layers if cfg["model"] == "wavlm" else 0, **common)
 
@@ -160,9 +161,10 @@ def evaluate(model, loader, cfg, device, probes: bool = False):
     return m, y, p
 
 
-def make_loader(rows, cfg, shuffle, seed=0):
+def make_loader(rows, cfg, shuffle, seed=0, norm_stats=None):
     ds = DualStreamFeatureDataset(rows, cfg["feat_root"], streams_for(cfg),
-                                  max_frames=cfg.get("max_frames"), cache=cfg.get("cache", False))
+                                  max_frames=cfg.get("max_frames"), cache=cfg.get("cache", False),
+                                  norm_stats=norm_stats)
     g = torch.Generator()
     g.manual_seed(seed)
     return DataLoader(ds, batch_size=cfg["batch_size"], shuffle=shuffle, collate_fn=collate_dual,
@@ -177,9 +179,12 @@ def train_fold(rows: List[Dict], test_fold: int, cfg: Dict, seed: int, device, l
     if wandb_run is not None:
         wandb_run.define_metric(f"{prefix}/*", step_metric=f"{prefix}/epoch")
     train_rows, val_rows, test_rows = split_fold(rows, test_fold, cfg["val_ratio"], seed)
-    train_loader = make_loader(train_rows, cfg, shuffle=True, seed=seed)
-    val_loader = make_loader(val_rows, cfg, shuffle=False) if val_rows else None
-    test_loader = make_loader(test_rows, cfg, shuffle=False)
+    norm_stats = None
+    if cfg.get("feat_norm", "none") == "global":   # statistics from the training rows of this fold only
+        norm_stats = compute_norm_stats(train_rows, cfg["feat_root"], streams_for(cfg), cfg.get("cache", False))
+    train_loader = make_loader(train_rows, cfg, shuffle=True, seed=seed, norm_stats=norm_stats)
+    val_loader = make_loader(val_rows, cfg, shuffle=False, norm_stats=norm_stats) if val_rows else None
+    test_loader = make_loader(test_rows, cfg, shuffle=False, norm_stats=norm_stats)
 
     model = build_model(cfg).to(device)
     opt = torch.optim.Adam(model.parameters(), lr=cfg["lr"], weight_decay=cfg["weight_decay"])

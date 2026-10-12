@@ -160,3 +160,35 @@ def test_select_test_picks_best_test_uar_epoch(tmp_path):
     assert res["selected_epoch"] == best["epoch"]
     assert abs(res["test"]["UAR"] - best["mon_test_UAR"]) < 1e-9
     assert res["n_val"] == 0
+
+
+def test_global_feature_normalisation_uses_training_stats(tmp_path):
+    from afea.dataset import compute_norm_stats
+    rows = _synthetic(tmp_path)
+    train = rows[:20]
+    stats = compute_norm_stats(train, str(tmp_path), ("wavlm", "fbank"))
+    frames = np.concatenate([np.load(tmp_path / "fbank" / f"{r['utt_id']}.npy").astype(np.float64) for r in train])
+    assert np.allclose(stats["fbank"][0], frames.mean(0), atol=1e-4)
+    assert np.allclose(stats["fbank"][1], frames.std(0), atol=1e-4)
+    ds = DualStreamFeatureDataset(train, str(tmp_path), ("wavlm", "fbank"), norm_stats=stats)
+    normed = np.concatenate([ds[i]["fbank"].numpy() for i in range(len(train))])
+    assert np.allclose(normed.mean(0), 0, atol=1e-3) and np.allclose(normed.std(0), 1, atol=1e-3)
+
+
+def test_pooled_layernorm_centres_streams_and_lifts_sqrt2_cap():
+    torch.manual_seed(0)
+    m = AFEANet(4, lstm_hidden=16, pooled_norm="layernorm").train()
+    out = m(torch.randn(8, 30, 1024), torch.full((8,), 30), torch.randn(8, 50, 40), torch.full((8,), 50))
+    for s in (out["s_wav"], out["s_fil"]):
+        assert torch.allclose(s.mean(-1), torch.zeros(8), atol=1e-5)
+        assert (s < 0).any()                    # no longer non-negative after max pooling
+    y = torch.tensor([0, 1, 2, 3, 0, 1, 2, 3])
+    assert seal_stats(out["s_wav"], out["s_fil"], y)["seal_neg_dist"] > 2 ** 0.5
+
+
+def test_featnorm_variants_train(tmp_path):
+    rows = _synthetic(tmp_path)
+    for kw in ({"feat_norm": "global"}, {"pooled_norm": "layernorm"},
+               {"feat_norm": "global", "pooled_norm": "layernorm", "model": "afea"},
+               {"feat_norm": "global", "model": "fbank"}):
+        run_cv(rows, _cfg(tmp_path, **kw), folds=[1], device="cpu")

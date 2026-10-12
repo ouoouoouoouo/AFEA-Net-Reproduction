@@ -167,12 +167,19 @@ class AFEANet(nn.Module):
     def __init__(self, num_classes: int, wavlm_dim: int = 1024, fbank_dim: int = 40,
                  lstm_hidden: int = 256, lstm_dropout: float = 0.5, num_afea_layers: int = 3,
                  isa_hidden: Optional[int] = None, fcn_hidden: int = 512, fcn_dropout: float = 0.0,
-                 dropout_pos: str = "pre_pool", wavlm_num_layers: int = 0, isa_mlp: str = "shared"):
+                 dropout_pos: str = "pre_pool", wavlm_num_layers: int = 0, isa_mlp: str = "shared",
+                 pooled_norm: str = "none"):
         super().__init__()
         self.layer_mix = LayerMix(wavlm_num_layers) if wavlm_num_layers > 0 else None
         self.enc_wav = BiLSTMEncoder(wavlm_dim, lstm_hidden, lstm_dropout, dropout_pos)
         self.enc_fil = BiLSTMEncoder(fbank_dim, lstm_hidden, lstm_dropout, dropout_pos)
         dim = self.enc_wav.out_dim
+        # optional LayerNorm on the pooled vectors S~ before SEAL / AFEA: puts both streams on the
+        # same scale and makes them zero-centred (SEAL distances are no longer capped at sqrt(2))
+        if pooled_norm not in ("none", "layernorm"):
+            raise ValueError(pooled_norm)
+        self.norm_wav = nn.LayerNorm(dim) if pooled_norm == "layernorm" else nn.Identity()
+        self.norm_fil = nn.LayerNorm(dim) if pooled_norm == "layernorm" else nn.Identity()
         self.afea = nn.ModuleList([AFEALayer(dim, isa_hidden, isa_mlp) for _ in range(num_afea_layers)])
         cls_in = dim if num_afea_layers > 0 else 2 * dim
         self.classifier = make_classifier(cls_in, num_classes, fcn_hidden, fcn_dropout)
@@ -183,8 +190,8 @@ class AFEANet(nn.Module):
         (diagnostic probe: how much does the prediction depend on that stream?)."""
         if isinstance(wavlm, (list, tuple)):
             wavlm = self.layer_mix(wavlm)
-        s_wav = self.enc_wav(wavlm, wavlm_len)
-        s_fil = self.enc_fil(fbank, fbank_len)
+        s_wav = self.norm_wav(self.enc_wav(wavlm, wavlm_len))
+        s_fil = self.norm_fil(self.enc_fil(fbank, fbank_len))
         if shuffle is not None:
             perm = torch.randperm(s_wav.shape[0], generator=generator).to(s_wav.device)
             if shuffle == "wav":

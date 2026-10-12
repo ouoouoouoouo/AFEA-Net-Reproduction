@@ -118,6 +118,26 @@ def testsel_configs(dataset: str) -> List[Tuple[str, List[str], str]]:
     ]
 
 
+def featnorm_configs(dataset: str) -> List[Tuple[str, List[str], str]]:
+    """Feature / representation normalisation that the paper might have applied but does not report.
+    fn_ = dataset-level z-score of WavLM and Fbank inputs; ln_ = LayerNorm on the pooled vectors
+    before SEAL / AFEA; fnln_ = both. Unbiased (validation-based) selection; reference in column 3."""
+    fn, ln = ["--feat_norm", "global"], ["--pooled_norm", "layernorm"]
+    return [
+        ("fn_wavlm", ["--model", "wavlm"] + fn, "wavlm"),
+        ("fn_fbank", ["--model", "fbank"] + fn, "fbank"),
+        ("fn_wo_afea", ["--afea_layers", "0"] + fn, "wo_afea"),
+        ("fn_wo_align", ["--no_align"] + fn, "wo_align"),
+        ("fn_afea_net", fn, "afea_net"),
+        ("ln_wo_afea", ["--afea_layers", "0"] + ln, "wo_afea"),
+        ("ln_afea3_nocon", ["--afea_layers", "3", "--no_con"] + ln, "afea3"),
+        ("ln_wo_align", ["--no_align"] + ln, "wo_align"),
+        ("ln_afea_net", ln, "afea_net"),
+        ("fnln_wo_align", ["--no_align"] + fn + ln, "wo_align"),
+        ("fnln_afea_net", fn + ln, "afea_net"),
+    ]
+
+
 def testsel_wa_configs(dataset: str) -> List[Tuple[str, List[str], str]]:
     """All Table 4/6 ablation rows under 'valid = test' with the epoch picked by the best test WA
     (tw_<name>); the reference is the same row with unbiased validation-based selection."""

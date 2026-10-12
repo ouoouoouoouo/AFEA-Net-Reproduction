@@ -16,7 +16,11 @@ _CACHE: Dict[str, np.ndarray] = {}
 
 class DualStreamFeatureDataset(Dataset):
     def __init__(self, rows: List[Dict], feat_root: str, streams=("wavlm", "fbank"),
-                 max_frames: Optional[Dict[str, int]] = None, cache: bool = False):
+                 max_frames: Optional[Dict[str, int]] = None, cache: bool = False,
+                 norm_stats: Optional[Dict[str, tuple]] = None):
+        """norm_stats: {stream: (mean[D], std[D])} -> per-dimension z-score applied after loading
+        (dataset-level feature normalisation, statistics from the training folds only)."""
+        self.norm_stats = norm_stats or {}
         self.rows = rows
         self.feat_root = feat_root
         self.streams = tuple(streams)
@@ -45,7 +49,11 @@ class DualStreamFeatureDataset(Dataset):
         limit = self.max_frames.get(stream)
         if limit:
             x = x[:limit]
-        return torch.from_numpy(x.astype(np.float32))
+        x = x.astype(np.float32)
+        if stream in self.norm_stats:
+            mean, std = self.norm_stats[stream]
+            x = (x - mean) / std
+        return torch.from_numpy(x)
 
     def __getitem__(self, idx):
         row = self.rows[idx]
@@ -74,3 +82,20 @@ def collate_dual(batch: List[Dict]) -> Dict[str, torch.Tensor]:
         else:
             out[stream], out[stream + "_len"] = pad_stream([b[stream] for b in batch])
     return out
+
+
+def compute_norm_stats(rows: List[Dict], feat_root: str, streams, cache: bool = False) -> Dict[str, tuple]:
+    """Per-dimension mean / std over all frames of `rows` (use the training folds only)."""
+    ds = DualStreamFeatureDataset(rows, feat_root, [s for s in streams if s != "wavlm_all"], cache=cache)
+    stats = {}
+    for stream in ds.streams:
+        total, total_sq, n = None, None, 0
+        for row in rows:
+            x = ds._load(stream, row["utt_id"]).double().numpy()
+            total = x.sum(0) if total is None else total + x.sum(0)
+            total_sq = (x * x).sum(0) if total_sq is None else total_sq + (x * x).sum(0)
+            n += x.shape[0]
+        mean = total / n
+        std = np.sqrt(np.maximum(total_sq / n - mean * mean, 1e-12))
+        stats[stream] = (mean.astype(np.float32), std.astype(np.float32))
+    return stats

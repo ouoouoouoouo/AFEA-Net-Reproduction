@@ -67,6 +67,10 @@ def parse_args():
     ap.add_argument("--dropout_pos", choices=["pre_pool", "post_pool"], default="pre_pool")
     ap.add_argument("--wavlm_layers", choices=["last", "all"], default="last",
                     help="all = learnable weighted sum of every WavLM layer (needs features/<ds>/wavlm_all)")
+    ap.add_argument("--feat_norm", choices=["none", "global"], default="none",
+                    help="global = per-dimension z-score of the input features with training-fold statistics")
+    ap.add_argument("--pooled_norm", choices=["none", "layernorm"], default="none",
+                    help="LayerNorm on the pooled BiLSTM vectors before SEAL / AFEA")
     ap.add_argument("--no_diag", action="store_true", help="disable diagnostic metrics / probes")
     ap.add_argument("--wandb", default=None, metavar="PROJECT",
                     help="log to Weights & Biases under this project (off by default)")

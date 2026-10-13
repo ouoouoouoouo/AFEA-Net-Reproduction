@@ -75,3 +75,12 @@ def test_select_test_by_wa(tmp_path):
     res = json.load(open(tmp_path / "r" / "fold1_seed42.json"))
     best = max(res["history"], key=lambda h: h["mon_test_WA"])
     assert res["selected_epoch"] == best["epoch"] and abs(res["test"]["WA"] - best["mon_test_WA"]) < 1e-9
+
+
+def test_twln_configs_add_pooled_layernorm_to_every_tw_row():
+    from afea.suite import ablation_configs, testsel_wa_ln_configs
+    cfgs = testsel_wa_ln_configs("iemocap")
+    assert len(cfgs) == len(ablation_configs("iemocap")) == 12
+    for name, args, ref in cfgs:
+        assert name.startswith("twln_") and ref == "tw_" + name[5:]
+        assert args[-2:] == ["--pooled_norm", "layernorm"] and "--test_select_metric" in args

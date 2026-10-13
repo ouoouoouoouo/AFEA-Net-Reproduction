@@ -145,6 +145,13 @@ def testsel_wa_configs(dataset: str) -> List[Tuple[str, List[str], str]]:
     return [(f"tw_{n}", a + t, n) for n, a in ablation_configs(dataset)]
 
 
+def testsel_wa_ln_configs(dataset: str) -> List[Tuple[str, List[str], str]]:
+    """Same as testsel_wa_configs plus LayerNorm on the pooled vectors (twln_<name>), the only setting in
+    which SEAL and AFEA both helped under unbiased selection (round 4); the reference is the tw_ row."""
+    t = ["--select", "test", "--val_ratio", "0", "--test_select_metric", "wa", "--pooled_norm", "layernorm"]
+    return [(f"twln_{n}", a + t, f"tw_{n}") for n, a in ablation_configs(dataset)]
+
+
 # Tables 4 and 6 of the paper: (WA, UAR, P, F1)
 PAPER = {
     "iemocap": {

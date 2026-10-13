@@ -259,3 +259,73 @@ RAVDESS does not match either protocol. The paper's Fbank row matches our *unbia
 | Is it waveform normalisation or the selection metric? | No (≤ 0.6 WA). |
 | Do AFEA and SEAL help? | Not in any protocol we tried: −1.8 and −0.6 WA under the paper's likely protocol, against +0.7 and +1.1 in the paper. |
 | RAVDESS | Not reproduced under either protocol. The split is probably different. |
+
+## Round 4: test-WA selection and feature normalisation (IEMOCAP)
+
+The values below are test WA, averaged over the 5 folds and the seeds. Standard deviations will appear in `runs/results.md` and in the W&B export.
+
+### All ablation rows under "valid = test" with the epoch picked by test WA (`tw_*`, 5 seeds)
+
+| Row | Ours | Paper | Δ |
+|---|---|---|---|
+| Fbank | 57.6 | 56.2 | +1.4 |
+| WavLM | 73.9 | 72.8 | +1.1 |
+| w/o L_ali | 73.8 | 74.0 | −0.2 |
+| w/o AFEA | 73.9 | 73.9 | 0.0 |
+| AFEA-1 | 73.4 | 74.3 | −0.9 |
+| AFEA-2 | 72.6 | 74.5 | −1.9 |
+| AFEA-3 | 72.6 | 74.6 | −2.0 |
+| AFEA-4 | 72.5 | 74.4 | −1.9 |
+| w/o L_con (= AFEA-3) | 72.6 | 74.6 | −2.0 |
+| w/o L_con1 | 73.6 | 74.7 | −1.1 |
+| w/o L_con2 | 73.8 | 74.8 | −1.0 |
+| AFEA-Net | 73.4 | 75.1 | −1.7 |
+
+| Comparison | Paper | Ours (`tw_`) |
+|---|---|---|
+| SEAL: AFEA-Net − w/o L_ali | +1.1 | −0.4 |
+| AFEA: AFEA-Net − w/o AFEA | +1.2 | −0.5 |
+| L_con: AFEA-Net − AFEA-3 | +0.5 | +0.8 |
+| Depth: AFEA-3 − AFEA-1 | +0.3 | −0.8 |
+
+Selecting on WA instead of UAR changes nothing qualitatively. The single-stream and concat rows still match the paper, or exceed it. Every row that contains AFEA falls 1–2 WA short, SEAL is still negative, and accuracy drops as AFEA layers are added, whereas in the paper it rises up to 3 layers. Only the continuity loss behaves as the paper reports.
+
+### Feature and pooled-vector normalisation (unbiased selection, 3 seeds, Δ against the same config without normalisation on the same seeds)
+
+| Config | WA | Δ |
+|---|---|---|
+| `fn_fbank` (dataset z-score of the inputs) | 55.0 | 0.0 |
+| `fn_wavlm` | 72.1 | +0.7 |
+| `fn_wo_afea` | 71.7 | +0.3 |
+| `fn_wo_align` | 70.2 | −1.4 |
+| `fn_afea_net` | 69.5 | −1.8 |
+| `ln_wo_afea` (LayerNorm on the pooled vectors) | 70.9 | −0.5 |
+| `ln_afea3_nocon` | 69.7 | −0.3 |
+| `ln_wo_align` | 71.3 | −0.3 |
+| `ln_afea_net` | **72.1** | **+0.8** |
+| `fnln_wo_align` | 69.1 | −2.5 |
+| `fnln_afea_net` | 70.1 | −1.2 |
+
+- **Dataset-level z-scoring of the inputs** (`fn_`) helps WavLM alone a little, but hurts every model with AFEA (−1.4 to −1.8). It does not explain the gap.
+- **LayerNorm on the pooled vectors** (`ln_`) is the first setting in which both proposed components help:
+
+  | Comparison | Paper | Without LN | With LN (`ln_`) |
+  |---|---|---|---|
+  | SEAL: AFEA-Net − w/o L_ali | +1.1 | −0.3 | **+0.8** |
+  | AFEA: AFEA-Net − w/o AFEA | +1.2 | −0.1 | **+1.2** |
+  | Ordering AFEA-Net > w/o L_ali > w/o AFEA | yes | no | **yes** |
+
+  The relative pattern matches the paper's Table 4, but the absolute level does not: `ln_afea_net` reaches 72.1 under unbiased selection, against 71.3 without LN. Part of the AFEA gain comes from `ln_wo_afea` being 0.5 lower than plain concat. These are 3-seed results with seed standard deviations of about 0.5, so they need confirming before any claim.
+- After centring, the SEAL distances spread out a little more (positive 0.958 vs negative 1.013), but negative pairs still sit at a distance of about 1. The alignment is still weak.
+
+### Next step
+
+Two tiers test whether the LayerNorm effect holds:
+
+- `twln`: all 12 ablation rows with LayerNorm under the `tw` protocol, 5 seeds.
+- `ln`: 2 more seeds for the `ln_` configs.
+
+```bash
+python scripts/run_suite.py --gpus 0 1 2 3 --jobs_per_gpu 2 --tiers twln ln --datasets iemocap \
+    --seeds 42 1 2 3 4 --diag_seeds 42 1 2 3 4 --wandb afea-net
+```

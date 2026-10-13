@@ -24,6 +24,7 @@ PROTOCOLS = {
     "unbiased": ("", "epoch selected on a validation split of the training sessions"),
     "t": ("t_", "epoch with the best UAR on the held-out fold (valid = test)"),
     "tw": ("tw_", "epoch with the best WA on the held-out fold (valid = test)"),
+    "twln": ("twln_", "epoch with the best WA on the held-out fold (valid = test), LayerNorm on pooled vectors"),
 }
 
 

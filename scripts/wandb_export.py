@@ -23,7 +23,8 @@ import numpy as np  # noqa: E402
 
 from afea.report import PROTOCOLS, paper_table, stats_from_runs  # noqa: E402
 from afea.suite import (PAPER, ablation_configs, diagnosis_configs, protocol_configs,  # noqa: E402
-                        testsel_configs, testsel_wa_configs, variant_configs, featnorm_configs)
+                        testsel_configs, testsel_wa_configs, testsel_wa_ln_configs, variant_configs,
+                        featnorm_configs)
 
 NAME_RE = re.compile(r"^(iemocap|ravdess)_(.+)_s(\d+)$")
 KEYS = ("WA", "UAR", "F1")            # columns of the overview tables
@@ -119,7 +120,8 @@ def tables(data):
                 lines.append(row(n, cfgs[n], o))
             lines.append("")
 
-        for cfg_fn, crit in ((testsel_configs, "UAR"), (testsel_wa_configs, "WA")):
+        for cfg_fn, crit in ((testsel_configs, "UAR"), (testsel_wa_configs, "WA"),
+                             (testsel_wa_ln_configs, "WA, LayerNorm on pooled vectors")):
             lines += testsel_section(cfgs, ds, cfg_fn, crit)
     return lines
 
@@ -129,7 +131,7 @@ def testsel_section(cfgs, ds, cfg_fn, crit):
     if not present:
         return []
     lines = [f"### 'valid = test' (train on all training folds, epoch with best test {crit}; optimistic)", "",
-             "| config | seeds | WA | UAR | F1 | unbiased same config (WA, same seeds) | gain | paper WA / UAR |",
+             "| config | seeds | WA | UAR | F1 | reference config (WA, same seeds) | gain | paper WA / UAR |",
              "|---|---|---|---|---|---|---|---|"]
     for n, ref in present:
         runs = cfgs[n]
@@ -140,7 +142,7 @@ def testsel_section(cfgs, ds, cfg_fn, crit):
             ref_txt, gain = f"{rw:.1f} ({ref})", f"{ow - rw:+.1f}"
         else:
             ref_txt, gain = f"– ({ref})", "–"
-        p = PAPER.get(ds, {}).get(ref)
+        p = PAPER.get(ds, {}).get(n.split("_", 1)[1])
         ptxt = f"{p[0]*100:.1f} / {p[1]*100:.1f}" if p else ""
         lines.append(row(n, runs, f" | {ref_txt} | {gain} | {ptxt}"))
     lines.append("")
@@ -155,7 +157,7 @@ def main():
     ap.add_argument("--no_oracle", action="store_true", help="skip history scans (faster)")
     ap.add_argument("--paper_table", nargs="+", default=[], choices=sorted(PROTOCOLS),
                     help="also write Repro-vs-Paper tables like Table 4/6 for these protocols: unbiased, "
-                         "t (test-UAR selection), tw (test-WA selection); LaTeX goes to paper_tables.tex")
+                         "t (test-UAR selection), tw (test-WA selection), twln (tw + pooled LayerNorm); LaTeX goes to paper_tables.tex")
     args = ap.parse_args()
 
     import wandb

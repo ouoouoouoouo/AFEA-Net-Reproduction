@@ -11,8 +11,10 @@ import os
 import _path  # noqa: F401
 import numpy as np
 
-from afea.suite import (PAPER, PAPER_ROW_NAMES, ablation_configs, diagnosis_configs, protocol_configs,
-                        sweep_configs, testsel_configs, variant_configs)
+from afea.report import PROTOCOLS, paper_table, stats_from_runs
+from afea.suite import (PAPER, PAPER_ROW_NAMES, ablation_configs, diagnosis_configs, featnorm_configs,
+                        protocol_configs, sweep_configs, testsel_configs, testsel_wa_configs,
+                        testsel_wa_ln_configs, variant_configs)
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 KEYS = ("WA", "UAR", "P", "F1")
@@ -51,10 +53,10 @@ def table(ds, configs, with_paper):
     return lines
 
 
-def diagnosis_table(ds):
+def diagnosis_table(ds, cfg_fn=diagnosis_configs):
     lines = ["| config | args | seeds | WA | UAR | F1 | reference | ref WA (same seeds) | ΔWA |",
              "|---|---|---|---|---|---|---|---|---|"]
-    for name, args, ref in diagnosis_configs(ds):
+    for name, args, ref in cfg_fn(ds):
         runs = load(ds, name)
         if not runs:
             lines.append(f"| {name} | `{' '.join(args)}` | 0 | – | – | – | {ref} | – | – |")
@@ -92,10 +94,10 @@ def protocol_table(ds):
     return lines
 
 
-def testsel_table(ds):
+def testsel_table(ds, cfg_fn=testsel_configs):
     lines = ["| config | seeds | WA | UAR | F1 | same config, unbiased selection (WA, same seeds) | gain from test selection |",
              "|---|---|---|---|---|---|---|"]
-    for name, args, ref in testsel_configs(ds):
+    for name, args, ref in cfg_fn(ds):
         runs = load(ds, name)
         if not runs:
             continue
@@ -114,6 +116,7 @@ def testsel_table(ds):
 def main():
     out = ["# Reproduction results", "",
            "Values are % (mean ± std over seeds of the 5-fold mean). Protocol: see ASSUMPTIONS.md.", ""]
+    tex_all = []
     for ds in ("iemocap", "ravdess"):
         if not glob.glob(os.path.join(ROOT, "runs", ds, "*", "seed*", "summary.json")):
             continue
@@ -132,9 +135,26 @@ def main():
             out += ["### 'valid = test' protocol (train on all training folds, epoch with best UAR on the "
                     "held-out fold; optimistic, common in IEMOCAP papers)", ""]
             out += testsel_table(ds) + [""]
+        if any(load(ds, n) for n, _, _ in featnorm_configs(ds)):
+            out += ["### Feature / pooled-vector normalisation (fn_ = input z-score, ln_ = LayerNorm on pooled "
+                    "vectors, fnln_ = both; Δ = WA change vs the reference config, same seeds)", ""]
+            out += diagnosis_table(ds, featnorm_configs) + [""]
+        for cfg_fn, title in ((testsel_wa_configs, "best test WA"),
+                              (testsel_wa_ln_configs, "best test WA, LayerNorm on pooled vectors")):
+            if any(load(ds, n) for n, _, _ in cfg_fn(ds)):
+                out += [f"### 'valid = test' protocol (epoch with {title}; optimistic)", ""]
+                out += testsel_table(ds, cfg_fn) + [""]
+        for proto, (prefix, _) in PROTOCOLS.items():
+            md, tex = paper_table(stats_from_runs({n: load(ds, prefix + n) for n in PAPER[ds]}, ""), ds, proto)
+            out += md
+            if tex:
+                tex_all.append(tex)
+    if tex_all:
+        with open(os.path.join(ROOT, "runs", "paper_tables.tex"), "w", encoding="utf-8") as f:
+            f.write("% requires \\usepackage{booktabs}\n\n" + "\n\n".join(tex_all) + "\n")
     text = "\n".join(out)
     print(text)
-    with open(os.path.join(ROOT, "runs", "results.md"), "w") as f:
+    with open(os.path.join(ROOT, "runs", "results.md"), "w", encoding="utf-8") as f:
         f.write(text + "\n")
 
 

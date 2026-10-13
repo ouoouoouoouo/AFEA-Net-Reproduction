@@ -213,7 +213,7 @@ python scripts/run_suite.py --gpus 0 1 2 3 --jobs_per_gpu 2 --tiers testsel_wa -
 python scripts/wandb_export.py --project <entity>/afea-net --no_oracle --paper_table unbiased t tw
 ```
 
-The `testsel_wa` tier runs all 12 ablation rows (`tw_*`) under the "valid = test" protocol, with the epoch chosen by the best test WA. `--paper_table` adds one "reproduction vs. paper" table per protocol to the Markdown output. Each table reports WA, UAR, P and F1 as mean ± std, with the best value in each column in bold. The LaTeX version is written to `paper_tables.tex` (requires `booktabs`).
+The `testsel_wa` tier runs all 12 ablation rows (`tw_*`) under the "valid = test" protocol, with the epoch chosen by the best test WA. `--paper_table` adds one "reproduction vs. paper" table per protocol to the Markdown output. Each table reports WA, UAR, P and F1 as mean ± std, with the best value in each column in bold. The LaTeX version is written to `paper_tables.tex` (requires `booktabs`). The `twln` tier repeats `tw_*` with LayerNorm on the pooled vectors (`twln_*`), and the `ln` tier runs only the `ln_` configs of `featnorm`, for example to add seeds. `scripts/aggregate.py` writes the same tables to `runs/results.md` and `runs/paper_tables.tex` for every protocol that has runs.
 
 | Protocol | Runs | How the epoch is chosen |
 |---|---|---|

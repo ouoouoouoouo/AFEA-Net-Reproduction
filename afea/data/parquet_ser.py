@@ -45,10 +45,9 @@ def parquet_files(root: str) -> List[str]:
     return files
 
 
-def read_parquet(root: str):
-    import pandas as pd
-    return pd.concat([pd.read_parquet(f).assign(_file=os.path.basename(f)) for f in parquet_files(root)],
-                     ignore_index=True)
+def _pq():
+    import pyarrow.parquet as pq
+    return pq
 
 
 def _is_audio_cell(v) -> bool:
@@ -57,15 +56,19 @@ def _is_audio_cell(v) -> bool:
     return isinstance(v, (bytes, bytearray))
 
 
-def detect_columns(df) -> Dict[str, Optional[str]]:
-    cols = [c for c in df.columns if c != "_file"]
-    lower = {c.lower(): c for c in cols}
+def _first_rows(path: str, n: int) -> List[Dict]:
+    """Only the first record batch of one file is read (the corpus may be tens of GB)."""
+    batch = next(_pq().ParquetFile(path).iter_batches(batch_size=max(n, 1)), None)
+    return batch.to_pylist()[:n] if batch is not None else []
+
+
+def detect_columns(columns: Sequence[str], first: Dict) -> Dict[str, Optional[str]]:
+    lower = {c.lower(): c for c in columns}
 
     def by_name(names):
         return next((lower[n] for n in names if n in lower), None)
 
-    first = df.iloc[0]
-    audio = next((c for c in cols if _is_audio_cell(first[c])), None) or by_name(AUDIO_NAMES)
+    audio = next((c for c in columns if _is_audio_cell(first.get(c))), None) or by_name(AUDIO_NAMES)
     return {"audio": audio, "label": by_name(LABEL_NAMES), "speaker": by_name(SPEAKER_NAMES),
             "id": by_name(ID_NAMES)}
 
@@ -75,33 +78,44 @@ def _short(v, n=80):
         return "{" + ", ".join(f"{k}: {_short(x, 30)}" for k, x in v.items()) + "}"
     if isinstance(v, (bytes, bytearray)):
         return f"<{len(v)} bytes>"
-    if isinstance(v, np.ndarray):
-        return f"<array {v.shape} {v.dtype}>"
+    if isinstance(v, (list, np.ndarray)) and len(v) > 8:
+        return f"<sequence of {len(v)}>"
     s = repr(v)
     return s if len(s) <= n else s[:n] + "..."
 
 
+def _scalar_columns(schema) -> List[str]:
+    import pyarrow.types as pt
+    return [f.name for f in schema if pt.is_string(f.type) or pt.is_large_string(f.type) or pt.is_integer(f.type)
+            or pt.is_boolean(f.type) or pt.is_dictionary(f.type)]
+
+
 def inspect_parquet(root: str, n_rows: int = 3) -> str:
+    """Schema, a few rows and value counts of the small columns; audio is never loaded in bulk."""
+    pq = _pq()
     files = parquet_files(root)
-    df = read_parquet(root)
-    out = [f"{len(files)} parquet file(s), {len(df)} rows", "files: " + ", ".join(os.path.basename(f) for f in files[:10]),
+    meta = [pq.ParquetFile(f).metadata for f in files]
+    schema = pq.ParquetFile(files[0]).schema_arrow
+    rows = _first_rows(files[0], n_rows)
+    out = [f"{len(files)} parquet file(s), {sum(m.num_rows for m in meta)} rows",
+           "files: " + ", ".join(os.path.basename(f) for f in files[:10]) + (" ..." if len(files) > 10 else ""),
            "", "columns:"]
-    for c in df.columns:
-        if c == "_file":
-            continue
-        out.append(f"  {c:24s} {str(df[c].dtype):10s} e.g. {_short(df[c].iloc[0])}")
-    out += ["", f"first {n_rows} rows:"]
-    for i in range(min(n_rows, len(df))):
-        out.append("  " + " | ".join(f"{c}={_short(df[c].iloc[i], 40)}" for c in df.columns if c != "_file"))
-    out += ["", "low-cardinality columns (value counts):"]
-    for c in df.columns:
-        try:
-            vc = df[c].value_counts()
-        except TypeError:  # dict / bytes cells
-            continue
+    for f in schema:
+        out.append(f"  {f.name:24s} {str(f.type)[:60]:60s} e.g. {_short(rows[0].get(f.name)) if rows else ''}")
+    out += ["", f"first {len(rows)} rows:"]
+    for r in rows:
+        out.append("  " + " | ".join(f"{k}={_short(v, 40)}" for k, v in r.items()))
+    small = _scalar_columns(schema)
+    counts = {c: Counter() for c in small}
+    for f in files:  # only the small columns are read
+        t = pq.read_table(f, columns=small)
+        for c in small:
+            counts[c].update(t.column(c).to_pylist())
+    out += ["", "low-cardinality columns (value counts over all files):"]
+    for c, vc in counts.items():
         if 1 < len(vc) <= 30:
-            out.append(f"  {c}: " + ", ".join(f"{k}={v}" for k, v in vc.items()))
-    det = detect_columns(df)
+            out.append(f"  {c}: " + ", ".join(f"{k}={v}" for k, v in vc.most_common()))
+    det = detect_columns(schema.names, rows[0] if rows else {})
     out += ["", "auto-detected: " + ", ".join(f"{k}={v}" for k, v in det.items())]
     return "\n".join(out)
 
@@ -151,11 +165,14 @@ def build_parquet_manifest(root: str, wav_dir: str, audio_col: Optional[str] = N
                            label_col: Optional[str] = None, speaker_col: Optional[str] = None,
                            id_col: Optional[str] = None, label_map: Optional[Dict[str, str]] = None,
                            classes: Sequence[str] = IEMOCAP_CLASSES, prefix: str = "",
-                           overwrite: bool = False, log=print) -> List[Dict]:
-    """Decode audio to <wav_dir>/<utt_id>.wav and return manifest rows (fold = 1: test-only corpus)."""
+                           overwrite: bool = False, log=print, batch_size: int = 64) -> List[Dict]:
+    """Decode audio to <wav_dir>/<utt_id>.wav and return manifest rows (fold = 1: test-only corpus).
+    Files are streamed in small record batches, so memory stays low for large corpora."""
     import soundfile as sf
-    df = read_parquet(root)
-    det = detect_columns(df)
+    pq = _pq()
+    files = parquet_files(root)
+    schema = pq.ParquetFile(files[0]).schema_arrow
+    det = detect_columns(schema.names, (_first_rows(files[0], 1) or [{}])[0])
     audio_col, label_col = audio_col or det["audio"], label_col or det["label"]
     speaker_col, id_col = speaker_col or det["speaker"], id_col or det["id"]
     if audio_col is None or label_col is None:
@@ -165,28 +182,33 @@ def build_parquet_manifest(root: str, wav_dir: str, audio_col: Optional[str] = N
     label_map = label_map if label_map is not None else dict(DEFAULT_LABEL_MAP)
     os.makedirs(wav_dir, exist_ok=True)
     base_dir = root if os.path.isdir(root) else os.path.dirname(root)
+    cols = [c for c in (audio_col, label_col, speaker_col, id_col) if c]
 
     rows, dropped, seen = [], Counter(), set()
-    for i in range(len(df)):
-        r = df.iloc[i]
-        raw = r[label_col]
-        key = str(raw).strip().lower()
-        if key not in label_map:
-            dropped[key] += 1
-            continue
-        label = label_map[key]
-        if label not in classes:
-            raise SystemExit(f"label map sends {key!r} to {label!r}, which is not one of {list(classes)}")
-        uid = _safe_id(prefix + (str(r[id_col]) if id_col else f"{r['_file']}_{i}"))
-        if uid in seen:
-            uid = _safe_id(f"{uid}_{i}")
-        seen.add(uid)
-        path = os.path.abspath(os.path.join(wav_dir, uid + ".wav"))
-        if overwrite or not os.path.exists(path):
-            wav, sr = decode_audio(r[audio_col], base_dir)
-            sf.write(path, wav, sr)
-        rows.append({"utt_id": uid, "path": path, "label": label, "label_id": list(classes).index(label),
-                     "fold": 1, "speaker": str(r[speaker_col]) if speaker_col else ""})
+    for fi, f in enumerate(files):
+        pf, i = pq.ParquetFile(f), 0
+        stem = os.path.splitext(os.path.basename(f))[0]
+        for batch in pf.iter_batches(batch_size=batch_size, columns=cols):
+            for r in batch.to_pylist():
+                i += 1
+                key = str(r[label_col]).strip().lower()
+                if key not in label_map:
+                    dropped[key] += 1
+                    continue
+                label = label_map[key]
+                if label not in classes:
+                    raise SystemExit(f"label map sends {key!r} to {label!r}, which is not one of {list(classes)}")
+                uid = _safe_id(prefix + (str(r[id_col]) if id_col else f"{stem}_{i - 1}"))
+                if uid in seen:
+                    uid = _safe_id(f"{uid}_{stem}_{i - 1}")
+                seen.add(uid)
+                path = os.path.abspath(os.path.join(wav_dir, uid + ".wav"))
+                if overwrite or not os.path.exists(path):
+                    wav, sr = decode_audio(r[audio_col], base_dir)
+                    sf.write(path, wav, sr)
+                rows.append({"utt_id": uid, "path": path, "label": label, "label_id": list(classes).index(label),
+                             "fold": 1, "speaker": str(r[speaker_col]) if speaker_col else ""})
+        log(f"  {fi + 1}/{len(files)} {os.path.basename(f)}: {len(rows)} utterances kept so far")
     if dropped:
         log("dropped (no target class): " + ", ".join(f"{k}={v}" for k, v in dropped.most_common()))
     if not rows:

@@ -226,7 +226,7 @@ The `testsel_wa` tier runs all 12 ablation rows (`tw_*`) under the "valid = test
 Thai SER is read from Parquet files. First look at the column layout:
 
 ```bash
-pip install pandas pyarrow
+pip install pyarrow
 python scripts/inspect_parquet.py /home/ouo/dataset/thai-ser/data/
 ```
 

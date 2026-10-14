@@ -19,25 +19,27 @@ def _wav_bytes(sr=16000, sec=0.3, seed=0):
 
 
 def _parquet(tmp_path):
-    pd = pytest.importorskip("pandas", reason="pandas / pyarrow are only needed for Parquet corpora")
-    pytest.importorskip("pyarrow")
+    pa = pytest.importorskip("pyarrow", reason="pyarrow is only needed for Parquet corpora")
+    import pyarrow.parquet as pq
     d = tmp_path / "pq"
     d.mkdir()
     labels = ["Neutral", "Angry", "Happy", "Sad", "Frustrated", "neutral"]
-    df = pd.DataFrame({"audio": [{"bytes": _wav_bytes(seed=i), "path": f"f{i}.wav"} for i in range(6)],
-                       "emotion": labels, "speaker_id": ["s1", "s1", "s2", "s2", "s3", "s3"],
-                       "id": [f"utt{i}" for i in range(6)]})
-    df.iloc[:3].to_parquet(d / "train-00000.parquet")
-    df.iloc[3:].to_parquet(d / "train-00001.parquet")
+    t = pa.table({"audio": [{"bytes": _wav_bytes(seed=i), "path": f"f{i}.wav"} for i in range(6)],
+                  "emotion": labels, "speaker_id": ["s1", "s1", "s2", "s2", "s3", "s3"],
+                  "id": [f"utt{i}" for i in range(6)]})
+    pq.write_table(t.slice(0, 3), d / "train-00000.parquet")
+    pq.write_table(t.slice(3), d / "train-00001.parquet")
     return d
 
 
 def test_parquet_manifest_maps_labels_and_decodes_audio(tmp_path):
     root = _parquet(tmp_path)
-    import pandas as pd
-    assert detect_columns(pd.read_parquet(root / "train-00000.parquet")) == \
+    first = {"audio": {"bytes": b"x", "path": "a.wav"}, "emotion": "Sad"}
+    assert detect_columns(["id", "audio", "emotion", "speaker_id"], first) == \
         {"audio": "audio", "label": "emotion", "speaker": "speaker_id", "id": "id"}
-    assert "auto-detected" in inspect_parquet(str(root))
+    report = inspect_parquet(str(root))
+    assert "2 parquet file(s), 6 rows" in report and "speaker_id: s1=2, s2=2, s3=2" in report
+    assert "auto-detected: audio=audio, label=emotion" in report
     rows = build_parquet_manifest(str(root), str(tmp_path / "wav"), prefix="thaiser_", log=lambda m: None)
     assert [r["label"] for r in rows] == ["neu", "ang", "hap", "sad", "neu"]     # frustrated dropped
     assert [r["label_id"] for r in rows] == [3, 2, 1, 0, 3]                     # IEMOCAP class order

@@ -2,7 +2,7 @@ import io
 import json
 
 import numpy as np
-import pandas as pd
+import pytest
 import soundfile as sf
 
 from afea.data import read_manifest, write_manifest
@@ -19,6 +19,8 @@ def _wav_bytes(sr=16000, sec=0.3, seed=0):
 
 
 def _parquet(tmp_path):
+    pd = pytest.importorskip("pandas", reason="pandas / pyarrow are only needed for Parquet corpora")
+    pytest.importorskip("pyarrow")
     d = tmp_path / "pq"
     d.mkdir()
     labels = ["Neutral", "Angry", "Happy", "Sad", "Frustrated", "neutral"]
@@ -32,6 +34,7 @@ def _parquet(tmp_path):
 
 def test_parquet_manifest_maps_labels_and_decodes_audio(tmp_path):
     root = _parquet(tmp_path)
+    import pandas as pd
     assert detect_columns(pd.read_parquet(root / "train-00000.parquet")) == \
         {"audio": "audio", "label": "emotion", "speaker": "speaker_id", "id": "id"}
     assert "auto-detected" in inspect_parquet(str(root))

@@ -318,14 +318,44 @@ Selecting on WA instead of UAR changes nothing qualitatively. The single-stream 
   The relative pattern matches the paper's Table 4, but the absolute level does not: `ln_afea_net` reaches 72.1 under unbiased selection, against 71.3 without LN. Part of the AFEA gain comes from `ln_wo_afea` being 0.5 lower than plain concat. These are 3-seed results with seed standard deviations of about 0.5, so they need confirming before any claim.
 - After centring, the SEAL distances spread out a little more (positive 0.958 vs negative 1.013), but negative pairs still sit at a distance of about 1. The alignment is still weak.
 
-### Next step
+### Confirmation with 5 seeds, and LayerNorm under the paper's likely protocol (`twln_*`)
 
-Two tiers test whether the LayerNorm effect holds:
+With 5 seeds, under unbiased selection:
 
-- `twln`: all 12 ablation rows with LayerNorm under the `tw` protocol, 5 seeds.
-- `ln`: 2 more seeds for the `ln_` configs.
+| Config | Without LN | With LN (`ln_`) |
+|---|---|---|
+| w/o AFEA | 71.5 ± 0.7 | 71.1 ± 1.2 |
+| AFEA-3 (no L_con) | 69.8 ± 0.5 | 70.1 ± 0.9 |
+| w/o L_ali | 71.5 ± 0.3 | 71.5 ± 0.6 |
+| AFEA-Net | 71.1 ± 0.5 | **72.3 ± 0.2** |
 
-```bash
-python scripts/run_suite.py --gpus 0 1 2 3 --jobs_per_gpu 2 --tiers twln ln --datasets iemocap \
-    --seeds 42 1 2 3 4 --diag_seeds 42 1 2 3 4 --wandb afea-net
-```
+Under unbiased selection, LayerNorm makes SEAL worth +0.8 and AFEA worth +1.2. This matches the paper's +1.1 and +1.2, and it holds with 5 seeds.
+
+Under "valid = test" with WA selection, 5 seeds:
+
+| Row | `tw_` | `twln_` | Paper |
+|---|---|---|---|
+| WavLM | 73.9 | 73.9 (single stream, LN not used) | 72.8 |
+| w/o L_ali | 73.8 | 74.1 | 74.0 |
+| w/o AFEA | 73.9 | 74.1 | 73.9 |
+| AFEA-1 | 73.4 | 73.5 | 74.3 |
+| AFEA-2 | 72.6 | 73.2 | 74.5 |
+| AFEA-3 | 72.6 | 73.1 | 74.6 |
+| AFEA-4 | 72.5 | 72.6 | 74.4 |
+| w/o L_con1 | 73.6 | 73.7 | 74.7 |
+| w/o L_con2 | 73.8 | 74.2 | 74.8 |
+| AFEA-Net | 73.4 | **74.2** (UAR 74.9, P 75.2, F1 74.6) | 75.1 (UAR 75.3, P 76.0, F1 75.4) |
+
+| Comparison | Paper | `tw_` | `twln_` |
+|---|---|---|---|
+| SEAL: AFEA-Net − w/o L_ali | +1.1 | −0.4 | +0.1 |
+| AFEA: AFEA-Net − w/o AFEA | +1.2 | −0.5 | +0.1 |
+| L_con: AFEA-Net − AFEA-3 | +0.5 | +0.8 | +1.1 |
+| Depth: AFEA-3 − AFEA-1 | +0.3 | −0.8 | −0.4 |
+
+**Findings**
+
+- **The closest reproduction so far** comes from LayerNorm on the pooled vectors plus test-WA selection. AFEA-Net reaches 74.2 WA / 74.9 UAR, which is 0.9 WA and 0.4 UAR below the paper. The single-stream and concat rows are 0–1 WA *above* the paper.
+- **The ablation pattern still does not reproduce.** When the epoch is picked on the test session, SEAL and AFEA add only +0.1 each, which is inside seed noise (std ≈ 0.3). Accuracy still falls as AFEA layers are added. The paper's +1.1 / +1.2 gains appear only under unbiased selection.
+- **What LayerNorm actually changes:** it makes the full model's *selected* epoch better and more stable. Its std drops from 0.5 to 0.2, and its gain from test selection drops from +2.3 to +1.9, whereas concat still gains +3.0. It does not raise the model's best epoch above concat's.
+- **The continuity loss is the only component that helps consistently,** by +0.5 to +1.1 in every protocol.

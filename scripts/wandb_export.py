@@ -24,7 +24,7 @@ import numpy as np  # noqa: E402
 from afea.report import PROTOCOLS, paper_table, stats_from_runs  # noqa: E402
 from afea.suite import (PAPER, ablation_configs, diagnosis_configs, protocol_configs,  # noqa: E402
                         testsel_configs, testsel_wa_configs, testsel_wa_ln_configs, variant_configs,
-                        featnorm_configs)
+                        featnorm_configs, xc_configs)
 
 NAME_RE = re.compile(r"^(iemocap|ravdess)_(.+)_s(\d+)$")
 KEYS = ("WA", "UAR", "F1")            # columns of the overview tables
@@ -62,6 +62,9 @@ def collect(runs, want_oracle):
             continue
         ds, cfg, seed = m.group(1), m.group(2), int(m.group(3))
         rec = {k: float(summ[f"fold_mean/{k}"]) for k in ALL_KEYS if f"fold_mean/{k}" in summ}
+        for part in ("xc_fold_mean", "xc_vote"):  # cross-corpus test set (xc_* runs)
+            if f"{part}/WA" in summ:
+                rec[part] = {k: float(summ[f"{part}/{k}"]) for k in ALL_KEYS if f"{part}/{k}" in summ}
         rec["oracle"] = None
         if want_oracle(cfg):
             done += 1
@@ -118,6 +121,25 @@ def tables(data):
                 o = (f" | {np.mean([x['WA'] for x in orc])*100:.1f} | {np.mean([x['UAR'] for x in orc])*100:.1f}"
                      if orc else " | – | –")
                 lines.append(row(n, cfgs[n], o))
+            lines.append("")
+
+        present = [(n, ref) for n, _, ref in xc_configs(ds) if n in cfgs]
+        if present:
+            lines += ["### Cross-corpus: trained on IEMOCAP, tested on Thai SER (mean over fold models)", "",
+                      "| config | seeds | IEMOCAP WA | Thai WA | Thai UAR | Thai F1 | vote WA | vote UAR | ΔUAR vs reference |",
+                      "|---|---|---|---|---|---|---|---|---|"]
+            for n, ref in present:
+                runs = cfgs[n]
+                xc = [v["xc_fold_mean"] for v in runs.values() if "xc_fold_mean" in v]
+                vote = [v["xc_vote"] for v in runs.values() if "xc_vote" in v]
+                if not xc:
+                    continue
+                refx = {s: v["xc_fold_mean"]["UAR"] for s, v in cfgs.get(ref, {}).items() if "xc_fold_mean" in v}
+                d = [runs[s]["xc_fold_mean"]["UAR"] - u for s, u in refx.items() if s in runs and "xc_fold_mean" in runs[s]]
+                lines.append(f"| {n} | {len(xc)} | {fmt([v['WA'] for v in runs.values()])} | "
+                             f"{fmt([x['WA'] for x in xc])} | {fmt([x['UAR'] for x in xc])} | {fmt([x['F1'] for x in xc])} | "
+                             f"{fmt([x['WA'] for x in vote]) if vote else '–'} | {fmt([x['UAR'] for x in vote]) if vote else '–'} | "
+                             f"{(f'{np.mean(d) * 100:+.1f} ({ref})') if d else '–'} |")
             lines.append("")
 
         for cfg_fn, crit in ((testsel_configs, "UAR"), (testsel_wa_configs, "WA"),

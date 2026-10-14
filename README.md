@@ -221,6 +221,34 @@ The `testsel_wa` tier runs all 12 ablation rows (`tw_*`) under the "valid = test
 | `t` | `t_*` | best test UAR |
 | `tw` | `tw_*` | best test WA |
 
+### Cross-corpus test: train on IEMOCAP, test on Thai SER
+
+Thai SER is read from Parquet files. First look at the column layout:
+
+```bash
+pip install pandas pyarrow
+python scripts/inspect_parquet.py /home/ouo/dataset/thai-ser/data/
+```
+
+Then decode the audio and map the labels onto IEMOCAP's 4 classes. Unmapped labels, such as frustrated, are dropped:
+
+```bash
+python scripts/prepare_data.py --dataset thaiser --root /home/ouo/dataset/thai-ser/data \
+    --out manifests/thaiser.csv --wav_dir data/thaiser_wav
+    # if auto-detection fails: --audio_col audio --label_col emotion --label_map "neutral=neu,angry=ang,happy=hap,sad=sad"
+python scripts/extract_features.py --manifest manifests/thaiser.csv --out features/thaiser --device cuda
+```
+
+The `xc` tier trains every Table 4 row on IEMOCAP and tests each fold model on Thai SER. It also adds LayerNorm variants (`xcln_*`) for the dual-stream rows: 16 configs × 3 seeds = 48 jobs.
+
+```bash
+python scripts/run_suite.py --gpus 0 1 2 3 --jobs_per_gpu 2 --tiers xc --datasets iemocap \
+    --diag_seeds 42 1 2 --wandb afea-net
+python scripts/aggregate.py        # section "Cross-corpus" in runs/results.md
+```
+
+A single run is `train.py ... --xc_manifest manifests/thaiser.csv --xc_feat_root features/thaiser`. Add `--xc_monitor` to also log Thai SER accuracy every epoch; this is for monitoring only and never affects epoch selection. The assumptions are listed in ASSUMPTIONS.md under X-1 to X-4.
+
 ### Weights & Biases
 
 W&B logging is off by default. To use it, run `pip install wandb`, then `wandb login`, then pass `--wandb <project>`. Each `train.py` call creates one W&B run. The run name defaults to the basename of `--out`. Per-epoch curves are logged under `fold{k}_s{seed}/...`. The test metrics and the `fold_mean/*`, `fold_std/*` and `pooled/*` values are stored in the run summary. If the compute nodes have no internet access, set `WANDB_MODE=offline` and upload the runs later with `wandb sync wandb/offline-run-*`.

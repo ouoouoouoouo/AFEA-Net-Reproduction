@@ -71,6 +71,13 @@ def parse_args():
                     help="global = per-dimension z-score of the input features with training-fold statistics")
     ap.add_argument("--pooled_norm", choices=["none", "layernorm"], default="none",
                     help="LayerNorm on the pooled BiLSTM vectors before SEAL / AFEA")
+    ap.add_argument("--xc_manifest", default=None,
+                    help="cross-corpus test set: after epoch selection, every fold model is also tested on "
+                         "this manifest (labels must use the training corpus' classes); never used for training")
+    ap.add_argument("--xc_feat_root", default=None, help="features of --xc_manifest, e.g. features/thaiser")
+    ap.add_argument("--xc_name", default="thaiser")
+    ap.add_argument("--xc_monitor", action="store_true",
+                    help="also evaluate the cross-corpus set every epoch (monitoring only, slower)")
     ap.add_argument("--no_diag", action="store_true", help="disable diagnostic metrics / probes")
     ap.add_argument("--wandb", default=None, metavar="PROJECT",
                     help="log to Weights & Biases under this project (off by default)")
@@ -99,6 +106,8 @@ def main():
         raise SystemExit("--select val requires --val_ratio > 0")
     if args.wandb and not args.wandb_name and args.out:
         cfg["wandb_name"] = os.path.basename(os.path.normpath(args.out))
+    if bool(args.xc_manifest) != bool(args.xc_feat_root):
+        raise SystemExit("--xc_manifest and --xc_feat_root go together")
     rows = read_manifest(args.manifest)
     run_cv(rows, cfg, folds=args.folds, seeds=args.seeds, device=args.device, out_dir=args.out)
 

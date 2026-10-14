@@ -14,7 +14,7 @@ import numpy as np
 from afea.report import PROTOCOLS, paper_table, stats_from_runs
 from afea.suite import (PAPER, PAPER_ROW_NAMES, ablation_configs, diagnosis_configs, featnorm_configs,
                         protocol_configs, sweep_configs, testsel_configs, testsel_wa_configs,
-                        testsel_wa_ln_configs, variant_configs)
+                        testsel_wa_ln_configs, variant_configs, xc_configs)
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 KEYS = ("WA", "UAR", "P", "F1")
@@ -70,6 +70,35 @@ def diagnosis_table(ds, cfg_fn=diagnosis_configs):
             ref_txt, delta = "–", "–"
         lines.append(f"| {name} | `{' '.join(args)}` | {len(runs)} | {fmt(runs, 'WA')} | {fmt(runs, 'UAR')} | "
                      f"{fmt(runs, 'F1')} | {ref} | {ref_txt} | {delta} |")
+    return lines
+
+
+def load_part(ds, name, part):
+    runs = {}
+    for p in sorted(glob.glob(os.path.join(ROOT, "runs", ds, name, "seed*", "summary.json"))):
+        summ = json.load(open(p))
+        if part in summ:
+            runs[os.path.basename(os.path.dirname(p))[4:]] = summ[part]
+    return runs
+
+
+def xc_table(ds):
+    """Cross-corpus: IEMOCAP-trained fold models tested on Thai SER (mean over fold models; vote = majority
+    vote of the 5 fold models). The reference column gives the Thai SER UAR change against it."""
+    lines = ["| config | seeds | IEMOCAP WA | Thai WA | Thai UAR | Thai F1 | vote WA | vote UAR | reference | ΔUAR |",
+             "|---|---|---|---|---|---|---|---|---|---|"]
+    for name, _, ref in xc_configs(ds):
+        xc, vote, own = load_part(ds, name, "xc_fold_mean"), load_part(ds, name, "xc_vote"), load(ds, name)
+        if not xc:
+            continue
+        ref_xc = {s: v for s, v in load_part(ds, ref, "xc_fold_mean").items() if s in xc}
+        if ref_xc:
+            delta = np.mean([xc[s]["UAR"] - ref_xc[s]["UAR"] for s in ref_xc]) * 100
+            ref_txt = f"{ref} | {delta:+.1f}"
+        else:
+            ref_txt = f"{ref} | –"
+        lines.append(f"| {name} | {len(xc)} | {fmt(own, 'WA')} | {fmt(xc, 'WA')} | {fmt(xc, 'UAR')} | {fmt(xc, 'F1')} | "
+                     f"{fmt(vote, 'WA')} | {fmt(vote, 'UAR')} | {ref_txt} |")
     return lines
 
 
@@ -144,6 +173,9 @@ def main():
             if any(load(ds, n) for n, _, _ in cfg_fn(ds)):
                 out += [f"### 'valid = test' protocol (epoch with {title}; optimistic)", ""]
                 out += testsel_table(ds, cfg_fn) + [""]
+        if any(load_part(ds, n, "xc_fold_mean") for n, _, _ in xc_configs(ds)):
+            out += ["### Cross-corpus: trained on IEMOCAP, tested on Thai SER (labels mapped to 4 classes)", ""]
+            out += xc_table(ds) + [""]
         for proto, (prefix, _) in PROTOCOLS.items():
             md, tex = paper_table(stats_from_runs({n: load(ds, prefix + n) for n in PAPER[ds]}, ""), ds, proto)
             out += md

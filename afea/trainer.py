@@ -161,9 +161,10 @@ def evaluate(model, loader, cfg, device, probes: bool = False):
     return m, y, p
 
 
-def make_loader(rows, cfg, shuffle, seed=0, norm_stats=None):
-    ds = DualStreamFeatureDataset(rows, cfg["feat_root"], streams_for(cfg),
-                                  max_frames=cfg.get("max_frames"), cache=cfg.get("cache", False),
+def make_loader(rows, cfg, shuffle, seed=0, norm_stats=None, feat_root=None, cache=None):
+    ds = DualStreamFeatureDataset(rows, feat_root or cfg["feat_root"], streams_for(cfg),
+                                  max_frames=cfg.get("max_frames"),
+                                  cache=cfg.get("cache", False) if cache is None else cache,
                                   norm_stats=norm_stats)
     g = torch.Generator()
     g.manual_seed(seed)
@@ -173,7 +174,7 @@ def make_loader(rows, cfg, shuffle, seed=0, norm_stats=None):
 
 
 def train_fold(rows: List[Dict], test_fold: int, cfg: Dict, seed: int, device, log=print,
-               wandb_run=None) -> Dict:
+               wandb_run=None, xc_rows: Optional[List[Dict]] = None) -> Dict:
     set_seed(seed)
     prefix = f"fold{test_fold}_s{seed}"
     if wandb_run is not None:
@@ -185,6 +186,9 @@ def train_fold(rows: List[Dict], test_fold: int, cfg: Dict, seed: int, device, l
     train_loader = make_loader(train_rows, cfg, shuffle=True, seed=seed, norm_stats=norm_stats)
     val_loader = make_loader(val_rows, cfg, shuffle=False, norm_stats=norm_stats) if val_rows else None
     test_loader = make_loader(test_rows, cfg, shuffle=False, norm_stats=norm_stats)
+    # cross-corpus test set: never used for training or epoch selection; not cached in RAM (large corpora)
+    xc_loader = (make_loader(xc_rows, cfg, shuffle=False, norm_stats=norm_stats, feat_root=cfg["xc_feat_root"],
+                             cache=False) if xc_rows else None)
 
     model = build_model(cfg).to(device)
     opt = torch.optim.Adam(model.parameters(), lr=cfg["lr"], weight_decay=cfg["weight_decay"])
@@ -231,6 +235,9 @@ def train_fold(rows: List[Dict], test_fold: int, cfg: Dict, seed: int, device, l
                 tscore = selection_score(tm, cfg.get("test_select_metric") or "uar")
                 if tscore > best_score:
                     best_score, best_state, best_epoch = tscore, copy.deepcopy(model.state_dict()), epoch
+        if xc_loader is not None and cfg.get("xc_monitor"):  # monitoring only, never selection
+            xm, _, _ = evaluate(model, xc_loader, cfg, device)
+            rec.update({"mon_xc_WA": xm["WA"], "mon_xc_UAR": xm["UAR"]})
         history.append(rec)
         if wandb_run is not None:
             wandb_run.log({f"{prefix}/{k}": v for k, v in rec.items()})
@@ -252,6 +259,17 @@ def train_fold(rows: List[Dict], test_fold: int, cfg: Dict, seed: int, device, l
         wandb_run.summary[f"{prefix}/selected_epoch"] = best_epoch
         if layer_w is not None:
             wandb_run.summary[f"{prefix}/layer_weights"] = layer_w
+    xc = None
+    if xc_loader is not None:
+        xfull, xy, xp = evaluate(model, xc_loader, cfg, device, probes=diag)
+        xc = {"test": {k: xfull[k] for k in ("WA", "UAR", "P", "F1")},
+              "probe": {k: v for k, v in xfull.items() if k not in ("WA", "UAR", "P", "F1")},
+              "confusion": confusion(xy, xp, cfg["num_classes"]).tolist(), "y_true": xy.tolist(), "y_pred": xp.tolist()}
+        log(f"  fold {test_fold} seed {seed} CROSS-CORPUS {cfg.get('xc_name', 'xc')} (epoch {best_epoch}): " +
+            " ".join(f"{k}={v:.4f}" for k, v in xfull.items()))
+        if wandb_run is not None:
+            for k, v in xfull.items():
+                wandb_run.summary[f"{prefix}/xc_{k}"] = v
     oracle = None
     if diag and history and "mon_test_UAR" in history[0]:
         o = max(history, key=lambda h: h["mon_test_UAR"])
@@ -260,7 +278,7 @@ def train_fold(rows: List[Dict], test_fold: int, cfg: Dict, seed: int, device, l
             "test_probe": probes, "layer_weights": layer_w, "oracle_test": oracle,
             "n_train": len(train_rows), "n_val": len(val_rows), "n_test": len(test_rows),
             "confusion": confusion(y, p, cfg["num_classes"]).tolist(),
-            "y_true": y.tolist(), "y_pred": p.tolist(), "history": history}
+            "y_true": y.tolist(), "y_pred": p.tolist(), "history": history, "xc": xc}
 
 
 def run_cv(rows: List[Dict], cfg: Dict, folds: Optional[Sequence[int]] = None,
@@ -293,6 +311,12 @@ def run_cv(rows: List[Dict], cfg: Dict, folds: Optional[Sequence[int]] = None,
             log(f"WARNING: wandb disabled ({type(e).__name__}: {e})")
             wandb_run = None
 
+    xc_rows = None
+    if cfg.get("xc_manifest"):
+        from .data import read_manifest
+        xc_rows = read_manifest(cfg["xc_manifest"])
+        log(f"cross-corpus test set {cfg.get('xc_name', 'xc')}: {len(xc_rows)} utterances")
+
     for seed in seeds:
         for fold in folds:
             fold_path = os.path.join(out_dir, f"fold{fold}_seed{seed}.json") if out_dir else None
@@ -301,7 +325,7 @@ def run_cv(rows: List[Dict], cfg: Dict, folds: Optional[Sequence[int]] = None,
                     res = json.load(f)
                 log(f"  fold {fold} seed {seed}: found {fold_path}, skipping (resume)")
             else:
-                res = train_fold(rows, fold, cfg, seed, device, log, wandb_run)
+                res = train_fold(rows, fold, cfg, seed, device, log, wandb_run, xc_rows)
                 if fold_path:  # atomic write: a crash never leaves a half-written "done" file
                     with open(fold_path + ".tmp", "w") as f:
                         json.dump(res, f)
@@ -309,9 +333,12 @@ def run_cv(rows: List[Dict], cfg: Dict, folds: Optional[Sequence[int]] = None,
             results.append(res)
     summary = summarize(results, cfg["num_classes"])
     log("SUMMARY (mean over folds): " + json.dumps(summary["fold_mean"]))
+    if "xc_fold_mean" in summary:
+        log(f"CROSS-CORPUS {cfg.get('xc_name', 'xc')} (mean over fold models): {json.dumps(summary['xc_fold_mean'])}"
+            f"; majority vote: {json.dumps(summary['xc_vote'])}")
     if wandb_run is not None:
-        for part in ("fold_mean", "fold_std", "pooled"):
-            for k, v in summary[part].items():
+        for part in ("fold_mean", "fold_std", "pooled", "xc_fold_mean", "xc_fold_std", "xc_vote"):
+            for k, v in summary.get(part, {}).items():
                 wandb_run.summary[f"{part}/{k}"] = v
         cols = ["fold", "seed", "epoch", "WA", "UAR", "P", "F1"]
         import wandb
@@ -342,8 +369,23 @@ def summarize(results: List[Dict], num_classes: int) -> Dict:
     if results and all(r.get("oracle_test") for r in results):
         out_oracle = {"oracle_fold_mean (test-selected epoch, optimistic)":
                       {k: float(np.mean([r["oracle_test"][k] for r in results])) for k in ("WA", "UAR")}}
+    xc = {}
+    if results and all(r.get("xc") for r in results):
+        xper = {k: [r["xc"]["test"][k] for r in results] for k in keys}
+        # majority vote of the fold models (same utterance order), per seed, then averaged over seeds
+        votes = []
+        for s in seeds:
+            preds = np.array([r["xc"]["y_pred"] for r in results if r["seed"] == s])
+            yt = next(r["xc"]["y_true"] for r in results if r["seed"] == s)
+            vote = np.array([np.bincount(col, minlength=num_classes).argmax() for col in preds.T])
+            votes.append(compute_metrics(yt, vote, num_classes))
+        xc = {"xc_fold_mean": {k: float(np.mean(v)) for k, v in xper.items()},
+              "xc_fold_std": {k: float(np.std(v)) for k, v in xper.items()},
+              "xc_vote": {k: float(np.mean([m[k] for m in votes])) for k in keys},
+              "xc_confusion": np.sum([r["xc"]["confusion"] for r in results], axis=0).tolist()}
     return {
         **out_oracle,
+        **xc,
         "fold_mean": {k: float(np.mean(v)) for k, v in per.items()},
         "fold_std": {k: float(np.std(v)) for k, v in per.items()},
         "pooled": pooled,

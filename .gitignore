@@ -7,3 +7,4 @@ manifests/*.csv
 runs/
 *.pt
 *.npy
+/data/

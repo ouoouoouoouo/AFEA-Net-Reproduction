@@ -152,6 +152,23 @@ def testsel_wa_ln_configs(dataset: str) -> List[Tuple[str, List[str], str]]:
     return [(f"twln_{n}", a + t, f"tw_{n}") for n, a in ablation_configs(dataset)]
 
 
+
+XC_ARGS = ["--xc_manifest", "manifests/thaiser.csv", "--xc_feat_root", "features/thaiser", "--xc_name", "thaiser"]
+
+
+def xc_configs(dataset: str = "iemocap") -> List[Tuple[str, List[str], str]]:
+    """Cross-corpus test: train every Table 4 row on IEMOCAP (usual 5-fold CV and validation-based
+    epoch selection), then test each fold model on Thai SER (xc_<name>). xcln_<name> adds LayerNorm on
+    the pooled vectors for the dual-stream rows. Reference in column 3: WavLM alone for xc_*, the same
+    row without LayerNorm for xcln_*."""
+    if dataset != "iemocap":
+        return []
+    ln = ["--pooled_norm", "layernorm"]
+    out = [(f"xc_{n}", a + XC_ARGS, "xc_wavlm") for n, a in ablation_configs(dataset)]
+    rows = dict(ablation_configs(dataset))
+    out += [(f"xcln_{n}", rows[n] + ln + XC_ARGS, f"xc_{n}") for n in ("wo_align", "wo_afea", "afea3", "afea_net")]
+    return out
+
 # Tables 4 and 6 of the paper: (WA, UAR, P, F1)
 PAPER = {
     "iemocap": {

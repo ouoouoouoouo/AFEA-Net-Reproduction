@@ -117,6 +117,15 @@ https://doi.org/10.3390/electronics14050844
 - **A-ABL-1 (observation).** In Table 4 the "AFEA-3" row equals the "w/o L_con" row exactly. The same holds in Table 6. We infer that the AFEA-l rows were trained without continuity learning, so `run_ablations.sh` uses `--no_con` for them.
 - **A-ABL-2 (ASSUMED).** The "w/o L_con1/2/3" rows increase monotonically, and "w/o L_con3" equals the full model. This only makes sense if the rows mean "continuity applied up to layer k". `run_ablations.sh` builds them as `--con_weights α 0 0` and `--con_weights α β 0`. The k = 3 case is the full model.
 
+## 7b. Cross-corpus test on Thai SER (extension, not in the paper)
+
+| ID | Item | Status | Our choice |
+|----|------|--------|------------|
+| X-1 | Training data | ASSUMED | IEMOCAP only, exactly as in the main experiments (5-fold leave-one-session-out CV, the same epoch-selection rule). Each of the 5 fold models is then tested on the whole Thai SER set. Thai SER is never used for training, normalisation statistics or epoch selection. |
+| X-2 | Label mapping | ASSUMED | Thai SER labels are mapped onto IEMOCAP's 4 classes: neutral → neu, angry → ang, happy → hap, sad → sad. Labels with no IEMOCAP 4-class counterpart (e.g. frustrated) are dropped and counted by `prepare_data.py`. Override with `--label_map`. |
+| X-3 | Audio | ASSUMED | Every Parquet audio cell is decoded to a WAV file. Features are extracted exactly as for IEMOCAP: resampled to 16 kHz, final WavLM-Large layer, 40-d Fbank with per-utterance CMVN. With `--feat_norm global`, the IEMOCAP training-fold statistics are applied to Thai SER too. |
+| X-4 | Reported numbers | ASSUMED | "Thai WA/UAR/F1" is the mean over the 5 fold models (and over seeds). "vote" is the majority vote of the 5 fold models of one seed (ties go to the lowest class index), averaged over seeds. UAR is the main metric, because the class distribution of Thai SER differs from IEMOCAP's. |
+
 ## 8. Known inconsistencies in the paper
 
 - Sec. 4.4.1 says "WA of 75.3% and UAR of 75.1%", while Table 5 and the abstract give WA 75.1 and UAR 75.3. We treat the table as correct.

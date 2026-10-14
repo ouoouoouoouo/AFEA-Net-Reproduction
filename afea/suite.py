@@ -152,6 +152,28 @@ def testsel_wa_ln_configs(dataset: str) -> List[Tuple[str, List[str], str]]:
     return [(f"twln_{n}", a + t, f"tw_{n}") for n, a in ablation_configs(dataset)]
 
 
+
+# Names of the LayerNorm runs that already exist in featnorm_configs (same arguments), reused here.
+LN_EXISTING = {"wo_align": "ln_wo_align", "wo_afea": "ln_wo_afea", "afea3": "ln_afea3_nocon",
+               "wo_con": "ln_afea3_nocon", "afea_net": "ln_afea_net"}
+
+
+def ln_ablation_configs(dataset: str) -> List[Tuple[str, List[str], str]]:
+    """Every dual-stream Table 4/6 row with LayerNorm on the pooled vectors, unbiased protocol (4 training
+    sessions, 10 % of them for epoch selection, held-out session for testing only). Fbank / WavLM are
+    single-stream, so LayerNorm does not apply and the plain rows are used. "wo_con" has the same
+    arguments as "afea3" and maps to the same run. Reference = the same row without LayerNorm."""
+    ln = ["--pooled_norm", "layernorm"]
+    out, seen = [], set()
+    for n, a in ablation_configs(dataset):
+        if n in ("fbank", "wavlm"):
+            continue
+        name = LN_EXISTING.get(n, f"ln_{n}")
+        if name not in seen:
+            seen.add(name)
+            out.append((name, a + ln, n))
+    return out
+
 # Tables 4 and 6 of the paper: (WA, UAR, P, F1)
 PAPER = {
     "iemocap": {

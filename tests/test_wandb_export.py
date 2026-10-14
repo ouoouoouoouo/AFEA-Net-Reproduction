@@ -84,3 +84,15 @@ def test_twln_configs_add_pooled_layernorm_to_every_tw_row():
     for name, args, ref in cfgs:
         assert name.startswith("twln_") and ref == "tw_" + name[5:]
         assert args[-2:] == ["--pooled_norm", "layernorm"] and "--test_select_metric" in args
+
+
+def test_ln_ablation_reuses_existing_layernorm_runs_and_table_aliases():
+    from afea.report import run_name
+    from afea.suite import featnorm_configs, ln_ablation_configs
+    cfgs = {n: a for n, a, _ in ln_ablation_configs("iemocap")}
+    assert len(cfgs) == 9 and "ln_fbank" not in cfgs                       # single stream: LN does not apply
+    existing = {n: a for n, a, _ in featnorm_configs("iemocap") if n.startswith("ln_")}
+    assert all(cfgs[n] == a for n, a in existing.items())                  # same args -> finished runs are reused
+    assert run_name("ln", "wo_con") == run_name("ln", "afea3") == "ln_afea3_nocon"
+    assert run_name("ln", "wavlm") == "wavlm" and run_name("ln", "afea1") == "ln_afea1"
+    assert run_name("tw", "afea1") == "tw_afea1"

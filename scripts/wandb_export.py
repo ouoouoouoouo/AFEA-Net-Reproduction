@@ -21,7 +21,7 @@ from collections import defaultdict
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import numpy as np  # noqa: E402
 
-from afea.report import PROTOCOLS, paper_table, stats_from_runs  # noqa: E402
+from afea.report import ALIASES, PROTOCOLS, paper_table, stats_from_runs  # noqa: E402
 from afea.suite import (PAPER, ablation_configs, diagnosis_configs, protocol_configs,  # noqa: E402
                         testsel_configs, testsel_wa_configs, testsel_wa_ln_configs, variant_configs,
                         featnorm_configs, xc_configs)
@@ -179,7 +179,7 @@ def main():
     ap.add_argument("--no_oracle", action="store_true", help="skip history scans (faster)")
     ap.add_argument("--paper_table", nargs="+", default=[], choices=sorted(PROTOCOLS),
                     help="also write Repro-vs-Paper tables like Table 4/6 for these protocols: unbiased, "
-                         "t (test-UAR selection), tw (test-WA selection), twln (tw + pooled LayerNorm); LaTeX goes to paper_tables.tex")
+                         "t (test-UAR selection), tw (test-WA selection), twln (tw + pooled LayerNorm), ln (unbiased + pooled LayerNorm); LaTeX goes to paper_tables.tex")
     args = ap.parse_args()
 
     import wandb
@@ -199,7 +199,7 @@ def main():
     md_extra, tex_all = [], []
     for proto in args.paper_table:
         for ds in ("iemocap", "ravdess"):
-            md, tex = paper_table(stats_from_runs(data.get(ds, {}), PROTOCOLS[proto][0]), ds, proto)
+            md, tex = paper_table(stats_from_runs(data.get(ds, {}), PROTOCOLS[proto][0], ALIASES.get(proto)), ds, proto)
             md_extra += md
             if tex:
                 tex_all.append(tex)

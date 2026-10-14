@@ -25,6 +25,11 @@ PROTOCOLS = {
     "t": ("t_", "epoch with the best UAR on the held-out fold (valid = test)"),
     "tw": ("tw_", "epoch with the best WA on the held-out fold (valid = test)"),
     "twln": ("twln_", "epoch with the best WA on the held-out fold (valid = test), LayerNorm on pooled vectors"),
+    "ln": ("ln_", "epoch selected on a validation split of the training sessions, LayerNorm on pooled vectors"),
+}
+# protocol -> {table row: run name} where the run is not simply <prefix><row>
+ALIASES = {
+    "ln": {"fbank": "fbank", "wavlm": "wavlm", "afea3": "ln_afea3_nocon", "wo_con": "ln_afea3_nocon"},
 }
 
 
@@ -86,13 +91,20 @@ def paper_table(stats: Dict[str, Dict], dataset: str, protocol: str) -> Tuple[Li
     return md, "\n".join(tex)
 
 
-def stats_from_runs(runs_by_cfg: Dict[str, Dict[int, Dict[str, float]]], prefix: str) -> Dict[str, Dict]:
-    """runs_by_cfg: {config: {seed: {"WA": fraction, ...}}} -> stats for paper_table (in %)."""
+def run_name(protocol: str, row: str) -> str:
+    """Run (config) name that holds table row `row` under `protocol`."""
+    return ALIASES.get(protocol, {}).get(row, PROTOCOLS[protocol][0] + row)
+
+
+def stats_from_runs(runs_by_cfg: Dict[str, Dict[int, Dict[str, float]]], prefix: str,
+                    aliases: Dict[str, str] = None) -> Dict[str, Dict]:
+    """runs_by_cfg: {config: {seed: {"WA": fraction, ...}}} -> stats for paper_table (in %).
+    `aliases` maps a table row to its run name when that is not prefix + row."""
     import numpy as np
     out = {}
     for group in PAPER_ROWS:
         for name, _, _ in group:
-            runs = runs_by_cfg.get(prefix + name, {})
+            runs = runs_by_cfg.get((aliases or {}).get(name, prefix + name), {})
             if not runs:
                 continue
             st = {}

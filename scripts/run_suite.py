@@ -24,7 +24,7 @@ import _path  # noqa: F401
 
 from afea.suite import (ablation_configs, diagnosis_configs, protocol_configs, sweep_configs, testsel_configs,
                         testsel_wa_configs, testsel_wa_ln_configs, variant_configs,
-                        featnorm_configs, xc_configs)
+                        featnorm_configs, ln_ablation_configs, xc_configs)
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
@@ -57,6 +57,8 @@ def build_jobs(args):
                 print(f"WARNING: {', '.join(missing)} missing, skipping the xc tier (see README, cross-corpus test)")
                 continue
             jobs += [(d, n, s, a) for s in args.diag_seeds for d in datasets for n, a, _ in xc_configs(d)]
+        elif tier == "lnab":  # all dual-stream ablation rows with pooled LayerNorm, unbiased protocol
+            jobs += [(d, n, s, a) for s in args.seeds for d in datasets for n, a, _ in ln_ablation_configs(d)]
         elif tier == "ln":  # the ln_ subset of featnorm, e.g. to add seeds
             jobs += [(d, n, s, a) for s in args.diag_seeds for d in datasets
                      for n, a, _ in featnorm_configs(d) if n.startswith("ln_")]
@@ -115,7 +117,7 @@ def main():
     ap.add_argument("--seeds", type=int, nargs="+", default=[42, 1, 2, 3, 4])
     ap.add_argument("--tiers", nargs="+", default=["main", "seeds", "variants", "sweeps"],
                     choices=["main", "seeds", "variants", "sweeps", "diag", "protocol", "testsel", "testsel_wa", "featnorm",
-                             "twln", "ln", "xc"])
+                             "twln", "ln", "lnab", "xc"])
     ap.add_argument("--diag_seeds", type=int, nargs="+", default=[42, 1, 2])
     ap.add_argument("--stop_after_hours", type=float, default=None,
                     help="do not START new jobs after this many hours (running jobs finish)")

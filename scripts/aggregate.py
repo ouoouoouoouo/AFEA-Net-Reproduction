@@ -11,9 +11,9 @@ import os
 import _path  # noqa: F401
 import numpy as np
 
-from afea.report import PROTOCOLS, paper_table, stats_from_runs
+from afea.report import PROTOCOLS, paper_table, run_name, stats_from_runs
 from afea.suite import (PAPER, PAPER_ROW_NAMES, ablation_configs, diagnosis_configs, featnorm_configs,
-                        protocol_configs, sweep_configs, testsel_configs, testsel_wa_configs,
+                        ln_ablation_configs, protocol_configs, sweep_configs, testsel_configs, testsel_wa_configs,
                         testsel_wa_ln_configs, variant_configs, xc_configs)
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -176,8 +176,12 @@ def main():
         if any(load_part(ds, n, "xc_fold_mean") for n, _, _ in xc_configs(ds)):
             out += ["### Cross-corpus: trained on IEMOCAP, tested on Thai SER (labels mapped to 4 classes)", ""]
             out += xc_table(ds) + [""]
-        for proto, (prefix, _) in PROTOCOLS.items():
-            md, tex = paper_table(stats_from_runs({n: load(ds, prefix + n) for n in PAPER[ds]}, ""), ds, proto)
+        if any(load(ds, n) for n, _, _ in ln_ablation_configs(ds)):
+            out += ["### LayerNorm on pooled vectors, every ablation row (unbiased; Δ = WA change vs the same row "
+                    "without LayerNorm, same seeds)", ""]
+            out += diagnosis_table(ds, ln_ablation_configs) + [""]
+        for proto in PROTOCOLS:
+            md, tex = paper_table(stats_from_runs({n: load(ds, run_name(proto, n)) for n in PAPER[ds]}, ""), ds, proto)
             out += md
             if tex:
                 tex_all.append(tex)

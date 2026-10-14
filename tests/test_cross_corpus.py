@@ -65,3 +65,35 @@ def test_cross_corpus_evaluation(tmp_path):
     res = json.load(open(tmp_path / "run" / "fold1_seed0.json"))
     assert len(res["xc"]["y_pred"]) == len(read_manifest(str(tmp_path / "x.csv")))
     assert "mon_xc_UAR" in res["history"][0]
+
+
+def test_thaiser_layout_multiple_mics_and_majority_label(tmp_path):
+    pa = pytest.importorskip("pyarrow")
+    import pyarrow.parquet as pq
+    from afea.data.parquet_ser import PRESETS
+
+    def flac(seed):
+        buf = io.BytesIO()
+        sf.write(buf, np.zeros(1600, dtype=np.float32) + 0.01 * seed, 16000, format="FLAC")
+        return {"bytes": buf.getvalue(), "path": f"m{seed}.flac"}
+
+    d = tmp_path / "thai"
+    d.mkdir()
+    pq.write_table(pa.table({
+        "audio_id": ["s001_con_a_1.flac", "s001_con_a_2.flac", "s001_con_a_3.flac", "s002_con_b_1.flac"],
+        "majority_emo": ["Neutral", "None", "Frustrated", "Sad"],
+        "actor_id": ["001", "001", "002", "002"],
+        "mic_con": [flac(1), flac(2), flac(3), None],           # last row: condenser mic missing
+        "mic_clip": [flac(4), flac(5), flac(6), flac(7)],
+    }), d / "train-00000-of-00001.parquet")
+    p = PRESETS["thaiser"]
+    with pytest.raises(SystemExit):          # preset lists mic_middle / mic_zoom, which this file lacks
+        build_parquet_manifest(str(d), str(tmp_path / "w"), p["audio_col"], p["label_col"], p["speaker_col"],
+                               p["id_col"], log=lambda m: None)
+    logs = []
+    rows = build_parquet_manifest(str(d), str(tmp_path / "w"), "mic_con,mic_clip", p["label_col"], p["speaker_col"],
+                                  p["id_col"], prefix="thaiser_", log=logs.append)
+    assert [r["utt_id"] for r in rows] == ["thaiser_s001_con_a_1", "thaiser_s002_con_b_1"]   # None / Frustrated dropped
+    assert [r["label"] for r in rows] == ["neu", "sad"] and [r["speaker"] for r in rows] == ["001", "002"]
+    assert rows[0]["path"].endswith(".flac") and sf.read(rows[1]["path"])[0][0] == pytest.approx(0.07, abs=1e-3)
+    assert any("mic_con=1, mic_clip=1" in m for m in logs)

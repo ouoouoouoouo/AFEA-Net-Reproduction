@@ -14,7 +14,7 @@ import _path  # noqa: F401
 
 from afea.data import write_manifest
 from afea.data.iemocap import build_iemocap_manifest
-from afea.data.parquet_ser import build_parquet_manifest, parse_label_map
+from afea.data.parquet_ser import PRESETS, build_parquet_manifest, parse_label_map
 from afea.data.ravdess import build_ravdess_manifest
 
 
@@ -27,8 +27,10 @@ def main():
     ap.add_argument("--no_strict", action="store_true", help="warn instead of failing on count mismatch")
     pq = ap.add_argument_group("Parquet corpora (see scripts/inspect_parquet.py)")
     pq.add_argument("--wav_dir", default=None, help="where decoded audio is written (default data/<dataset>_wav)")
-    pq.add_argument("--audio_col", default=None)
-    pq.add_argument("--label_col", default=None)
+    pq.add_argument("--audio_col", default=None,
+                    help="one column, or several separated by commas (first non-empty wins); "
+                         "thaiser default: mic_con,mic_clip,mic_middle,mic_zoom")
+    pq.add_argument("--label_col", default=None, help="thaiser default: majority_emo (assigned_emo = acted intent)")
     pq.add_argument("--speaker_col", default=None)
     pq.add_argument("--id_col", default=None)
     pq.add_argument("--label_map", default=None,
@@ -36,8 +38,10 @@ def main():
                          "unlisted labels are dropped; default: common English emotion names")
     args = ap.parse_args()
     if args.dataset in ("thaiser", "parquet"):
-        rows = build_parquet_manifest(args.root, args.wav_dir or f"data/{args.dataset}_wav", args.audio_col,
-                                      args.label_col, args.speaker_col, args.id_col,
+        preset = PRESETS.get(args.dataset, {})   # explicit flags override the preset
+        cols = {k: getattr(args, k) or preset.get(k) for k in ("audio_col", "label_col", "speaker_col", "id_col")}
+        rows = build_parquet_manifest(args.root, args.wav_dir or f"data/{args.dataset}_wav", cols["audio_col"],
+                                      cols["label_col"], cols["speaker_col"], cols["id_col"],
                                       parse_label_map(args.label_map), prefix=args.dataset + "_")
     else:
         build = build_iemocap_manifest if args.dataset == "iemocap" else build_ravdess_manifest

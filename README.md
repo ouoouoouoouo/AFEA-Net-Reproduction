@@ -235,7 +235,8 @@ Then decode the audio and map the labels onto IEMOCAP's 4 classes. Unmapped labe
 ```bash
 python scripts/prepare_data.py --dataset thaiser --root /home/ouo/dataset/thai-ser/data \
     --out manifests/thaiser.csv --wav_dir data/thaiser_wav
-    # if auto-detection fails: --audio_col audio --label_col emotion --label_map "neutral=neu,angry=ang,happy=hap,sad=sad"
+    # thaiser preset: audio = mic_con (fallback mic_clip, mic_middle, mic_zoom), label = majority_emo,
+    # speaker = actor_id, id = audio_id; any of them can be overridden, e.g. --label_col assigned_emo
 python scripts/extract_features.py --manifest manifests/thaiser.csv --out features/thaiser --device cuda
 ```
 

@@ -32,8 +32,19 @@ DEFAULT_LABEL_MAP = {
 AUDIO_NAMES = ("audio", "wav", "speech", "waveform", "file", "path", "audio_path", "filepath")
 LABEL_NAMES = ("emotion", "label", "labels", "emotion_label", "emo", "class", "category",
                "majority_emo", "assigned_emo", "emotion_name")
-SPEAKER_NAMES = ("speaker", "speaker_id", "spk", "spk_id", "actor", "client_id")
-ID_NAMES = ("id", "utt_id", "utterance_id", "name", "file_name", "filename", "key")
+SPEAKER_NAMES = ("speaker", "speaker_id", "spk", "spk_id", "actor", "actor_id", "client_id")
+ID_NAMES = ("id", "utt_id", "utterance_id", "audio_id", "name", "file_name", "filename", "key")
+# Raw audio bytes in these formats are written to disk as they are (no decoding, smallest files).
+COPY_FORMATS = (".wav", ".flac", ".ogg")
+
+# THAI SER (VISTEC / AIResearch) Hugging Face export: every utterance is recorded by several
+# microphones; mic_con is the one named by audio_id, the others are fallbacks when it is missing.
+# majority_emo = annotators' majority vote (perceived emotion, like IEMOCAP's labels); assigned_emo is the
+# emotion the actor was asked to perform. See ASSUMPTIONS.md X-2 / X-3.
+PRESETS = {
+    "thaiser": {"audio_col": "mic_con,mic_clip,mic_middle,mic_zoom", "label_col": "majority_emo",
+                "speaker_col": "actor_id", "id_col": "audio_id"},
+}
 
 
 def parquet_files(root: str) -> List[str]:
@@ -132,6 +143,7 @@ def decode_audio(cell, base_dir: str = ""):
             return decode_audio(cell["path"], base_dir)
         raise ValueError("audio cell has neither bytes, array nor path")
     if isinstance(cell, (bytes, bytearray)):
+        cell = bytes(cell)
         try:
             wav, sr = sf.read(io.BytesIO(cell), dtype="float32", always_2d=True)
         except Exception:  # e.g. mp3 with an old libsndfile
@@ -158,7 +170,34 @@ def parse_label_map(spec: Optional[str]) -> Dict[str, str]:
 
 
 def _safe_id(s: str) -> str:
+    s = os.path.splitext(s)[0] if os.path.splitext(s)[1].lower() in (".wav", ".flac", ".mp3", ".ogg") else s
     return re.sub(r"[^A-Za-z0-9_.-]+", "_", s)
+
+
+def _first_audio(r: Dict, audio_cols: Sequence[str]):
+    """First non-empty audio cell among the candidate columns -> (cell, column) or (None, None)."""
+    for c in audio_cols:
+        v = r.get(c)
+        if v is not None and not (isinstance(v, dict) and v.get("bytes") is None and v.get("array") is None
+                                  and not v.get("path")):
+            return v, c
+    return None, None
+
+
+def _write_audio(cell, out_stem: str, base_dir: str) -> str:
+    """Write one utterance to disk; returns the file path. Raw wav/flac/ogg bytes are copied as they are."""
+    import soundfile as sf
+    if isinstance(cell, dict) and cell.get("bytes") is not None:
+        ext = os.path.splitext(cell.get("path") or "")[1].lower()
+        if ext in COPY_FORMATS:
+            path = out_stem + ext
+            with open(path, "wb") as f:
+                f.write(cell["bytes"])
+            return path
+    wav, sr = decode_audio(cell, base_dir)
+    path = out_stem + ".wav"
+    sf.write(path, wav, sr)
+    return path
 
 
 def build_parquet_manifest(root: str, wav_dir: str, audio_col: Optional[str] = None,
@@ -166,9 +205,9 @@ def build_parquet_manifest(root: str, wav_dir: str, audio_col: Optional[str] = N
                            id_col: Optional[str] = None, label_map: Optional[Dict[str, str]] = None,
                            classes: Sequence[str] = IEMOCAP_CLASSES, prefix: str = "",
                            overwrite: bool = False, log=print, batch_size: int = 64) -> List[Dict]:
-    """Decode audio to <wav_dir>/<utt_id>.wav and return manifest rows (fold = 1: test-only corpus).
+    """Write audio to <wav_dir>/<utt_id>.<ext> and return manifest rows (fold = 1: test-only corpus).
+    `audio_col` may list several columns ("mic_con,mic_clip"): the first non-empty one is used.
     Files are streamed in small record batches, so memory stays low for large corpora."""
-    import soundfile as sf
     pq = _pq()
     files = parquet_files(root)
     schema = pq.ParquetFile(files[0]).schema_arrow
@@ -178,16 +217,21 @@ def build_parquet_manifest(root: str, wav_dir: str, audio_col: Optional[str] = N
     if audio_col is None or label_col is None:
         raise SystemExit(f"could not detect the audio / label columns (detected {det}); "
                          "pass --audio_col / --label_col (see scripts/inspect_parquet.py)")
-    log(f"columns: audio={audio_col} label={label_col} speaker={speaker_col} id={id_col}")
+    audio_cols = [c.strip() for c in audio_col.split(",")]
+    missing = [c for c in audio_cols + [label_col, speaker_col, id_col] if c and c not in schema.names]
+    if missing:
+        raise SystemExit(f"columns not in the Parquet schema: {missing}; available: {schema.names}")
+    log(f"columns: audio={audio_cols} label={label_col} speaker={speaker_col} id={id_col}")
     label_map = label_map if label_map is not None else dict(DEFAULT_LABEL_MAP)
     os.makedirs(wav_dir, exist_ok=True)
     base_dir = root if os.path.isdir(root) else os.path.dirname(root)
-    cols = [c for c in (audio_col, label_col, speaker_col, id_col) if c]
+    cols = audio_cols + [c for c in (label_col, speaker_col, id_col) if c]
+    used_mic, no_audio = Counter(), 0
 
     rows, dropped, seen = [], Counter(), set()
     for fi, f in enumerate(files):
         pf, i = pq.ParquetFile(f), 0
-        stem = os.path.splitext(os.path.basename(f))[0]
+        fstem = os.path.splitext(os.path.basename(f))[0]
         for batch in pf.iter_batches(batch_size=batch_size, columns=cols):
             for r in batch.to_pylist():
                 i += 1
@@ -198,17 +242,23 @@ def build_parquet_manifest(root: str, wav_dir: str, audio_col: Optional[str] = N
                 label = label_map[key]
                 if label not in classes:
                     raise SystemExit(f"label map sends {key!r} to {label!r}, which is not one of {list(classes)}")
-                uid = _safe_id(prefix + (str(r[id_col]) if id_col else f"{stem}_{i - 1}"))
+                uid = _safe_id(prefix + (str(r[id_col]) if id_col else f"{fstem}_{i - 1}"))
                 if uid in seen:
-                    uid = _safe_id(f"{uid}_{stem}_{i - 1}")
+                    uid = _safe_id(f"{uid}_{fstem}_{i - 1}")
+                cell, col = _first_audio(r, audio_cols)
+                if cell is None:
+                    no_audio += 1
+                    continue
                 seen.add(uid)
-                path = os.path.abspath(os.path.join(wav_dir, uid + ".wav"))
-                if overwrite or not os.path.exists(path):
-                    wav, sr = decode_audio(r[audio_col], base_dir)
-                    sf.write(path, wav, sr)
+                used_mic[col] += 1
+                stem = os.path.abspath(os.path.join(wav_dir, uid))
+                done = [stem + e for e in COPY_FORMATS if os.path.exists(stem + e)]
+                path = done[0] if done and not overwrite else _write_audio(cell, stem, base_dir)
                 rows.append({"utt_id": uid, "path": path, "label": label, "label_id": list(classes).index(label),
                              "fold": 1, "speaker": str(r[speaker_col]) if speaker_col else ""})
         log(f"  {fi + 1}/{len(files)} {os.path.basename(f)}: {len(rows)} utterances kept so far")
+    log("audio column used: " + ", ".join(f"{k}={v}" for k, v in used_mic.most_common())
+        + (f"; {no_audio} rows without audio skipped" if no_audio else ""))
     if dropped:
         log("dropped (no target class): " + ", ".join(f"{k}={v}" for k, v in dropped.most_common()))
     if not rows:

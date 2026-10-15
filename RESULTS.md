@@ -359,3 +359,26 @@ Under "valid = test" with WA selection, 5 seeds:
 - **The ablation pattern still does not reproduce.** When the epoch is picked on the test session, SEAL and AFEA add only +0.1 each, which is inside seed noise (std ≈ 0.3). Accuracy still falls as AFEA layers are added. The paper's +1.1 / +1.2 gains appear only under unbiased selection.
 - **What LayerNorm actually changes:** it makes the full model's *selected* epoch better and more stable. Its std drops from 0.5 to 0.2, and its gain from test selection drops from +2.3 to +1.9, whereas concat still gains +3.0. It does not raise the model's best epoch above concat's.
 - **The continuity loss is the only component that helps consistently,** by +0.5 to +1.1 in every protocol.
+
+## Cross-corpus test: trained on IEMOCAP, tested on THAI SER
+
+Training is the unbiased IEMOCAP protocol. Each of the 5 fold models is tested on THAI SER: 17,321 utterances whose `majority_emo` maps onto the 4 IEMOCAP classes (neu 42 %, hap 23 %, ang 18 %, sad 16 %). Values are means over 3 seeds; the ± values are std over seeds. "vote" is the majority vote of the 5 fold models.
+
+| Config | IEMOCAP WA | Thai WA | Thai UAR | Thai F1 | vote UAR |
+|---|---|---|---|---|---|
+| Fbank | 55.0 | 41.5 ± 1.8 | 42.9 ± 1.0 | 38.3 | 44.1 |
+| WavLM | 71.4 | 46.9 ± 2.3 | 47.0 ± 1.7 | 43.6 | 48.1 |
+| w/o L_ali | 71.6 | 48.8 ± 1.0 | 46.8 ± 1.3 | 43.7 | 48.5 |
+| w/o AFEA (concat) | 71.4 | 48.4 ± 2.9 | 47.9 ± 2.1 | 44.6 | 49.9 |
+| AFEA-1 | 70.5 | 49.3 ± 3.0 | 48.3 ± 1.7 | 45.0 | 50.0 |
+| AFEA-3 (= w/o L_con) | 70.0 | 49.1 ± 2.1 | 47.7 ± 2.0 | 44.8 | 50.0 |
+| AFEA-Net | 71.3 | 48.6 ± 2.4 | 47.7 ± 1.6 | 44.9 | 49.4 |
+| AFEA-Net + LayerNorm | 72.1 | 46.9 ± 0.6 | 47.7 ± 1.2 | 43.6 | 49.4 |
+
+**Findings**
+
+- **Large domain gap.** UAR falls from about 72 on IEMOCAP to about 47–48 on THAI SER (chance level is 25). The two corpora differ in language, recording set-up and annotation; about 21 % of the THAI SER test utterances come from the Zoom room.
+- **The dual-stream rows are about 1 UAR above WavLM alone** (AFEA-1 +1.3, concat +0.9, AFEA-Net +0.7). This is smaller than the seed std (1.5–2.4), so with 3 seeds it is a trend, not a finding.
+- **Among the dual-stream variants, differences are within noise** (46.4–48.3 UAR). On IEMOCAP the AFEA rows were worse than WavLM; here they are not, so their in-corpus deficit does not carry over.
+- **LayerNorm improves the in-corpus result (72.1) but not the cross-corpus result** (Thai UAR 47.7 in both cases); it only lowers the seed variance.
+- **The 5-fold majority vote adds about 1–2 UAR** for every model.

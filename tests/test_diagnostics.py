@@ -194,3 +194,18 @@ def test_featnorm_variants_train(tmp_path):
                {"feat_norm": "global", "pooled_norm": "layernorm", "model": "afea"},
                {"feat_norm": "global", "model": "fbank"}):
         run_cv(rows, _cfg(tmp_path, **kw), folds=[1], device="cpu")
+
+
+def test_afea_dx_tier_and_fusion_gain_diagnostic(tmp_path):
+    from afea.suite import afea_dx_configs
+    cfgs = {n: (a, r) for n, a, r in afea_dx_configs("iemocap")}
+    assert len(cfgs) == 12 and cfgs["sag_afea3"] == (["--afea_layers", "3", "--no_con", "--afea_block", "sagate"], "afea3")
+    assert cfgs["r16_afea_net"][0][-2:] == ["--isa_hidden", "32"] and cfgs["sagln_afea_net"][1] == "ln_afea_net"
+    rows = _synthetic(tmp_path)
+    res = run_cv(rows, _cfg(tmp_path, afea_block="sagate"), folds=[1], device="cpu")
+    assert res["fold_mean"]["WA"] >= 0
+    from afea.trainer import batch_diagnostics, build_model
+    m = build_model(_cfg(tmp_path, isa_mlp="separate", isa_hidden=4))
+    out = m(torch.randn(3, 20, 1024), torch.full((3,), 20), torch.randn(3, 30, 40), torch.full((3,), 30))
+    d = batch_diagnostics(out, torch.tensor([0, 1, 2]), _cfg(tmp_path))
+    assert {"afea_gain_L1", "afea_gain_L2", "afea_gain_L3"} <= set(d) and d["afea_gain_L1"] > 0

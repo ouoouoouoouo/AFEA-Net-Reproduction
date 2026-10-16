@@ -46,6 +46,10 @@ def parse_args():
     ap.add_argument("--isa_hidden", type=int, default=d["isa_hidden"])
     ap.add_argument("--isa_mlp", choices=["shared", "separate"], default="shared",
                     help="ISA gates from one shared MLP (default) or two independent MLPs")
+    ap.add_argument("--afea_block", choices=["afea", "sagate"], default="afea",
+                    help="afea: the paper's AFEA module (Eq. 7-15); sagate: the SA-Gate block of [51] that the "
+                         "paper cites as AFEA's inspiration (diagnostic)")
+    ap.add_argument("--sagate_reduction", type=int, default=16, help="MLP bottleneck of the SA-Gate block (D / r)")
     ap.add_argument("--fcn_hidden", type=int, default=d["fcn_hidden"])
     ap.add_argument("--fcn_dropout", type=float, default=d["fcn_dropout"])
     ap.add_argument("--val_ratio", type=float, default=d["val_ratio"])

@@ -421,3 +421,42 @@ Training is the unbiased IEMOCAP protocol. Each of the 5 fold models is tested o
 - **Among the dual-stream variants, differences are within noise** (46.4–48.3 UAR). On IEMOCAP the AFEA rows were worse than WavLM; here they are not, so their in-corpus deficit does not carry over.
 - **LayerNorm improves the in-corpus result (72.1) but not the cross-corpus result** (Thai UAR 47.7 in both cases); it only lowers the seed variance.
 - **The 5-fold majority vote adds about 1–2 UAR** for every model.
+
+## Is AFEA itself the problem?
+
+The symptoms all point at the AFEA module:
+
+- Without L_con, every AFEA depth is below plain concatenation. In the paper all are above it (+0.4 to +0.7).
+- Accuracy falls as layers are added (70.6 → 70.3 → 69.8 → 69.9 unbiased; 73.4 → 72.6 → 72.6 → 72.5 with test-WA selection), where the paper rises up to 3 layers.
+- L_con helps far more than in the paper (+1.3 to +2.2 against +0.5).
+
+**The code matches the equations.** `AFEALayer` was re-checked term by term against Eq. 7-15 and has no discrepancy. The equations themselves, however, leave out details of SA-Gate [51], the block the paper says AFEA is inspired by (see ASSUMPTIONS.md, section 7c).
+
+**The fused vector drifts away from the encoder outputs as layers are stacked.** The intra-continuity term at the last layer, MSE(F^L_wav, S̃_wav) + MSE(F^L_fil, S̃_fil), measured in the test-WA runs without L_con, grows with depth:
+
+| AFEA-1 | AFEA-2 | AFEA-3 | AFEA-4 |
+|---|---|---|---|
+| 0.62 | 2.49 | 6.61 | 12.92 |
+
+The mean squared pooled feature is only about 0.46 per dimension, so by 3–4 layers F^L is several times larger than S̃. With L_con the same term stays at 0.02–0.05.
+
+The equations allow this growth:
+
+- I = S + A · S_other adds the two streams.
+- The two ISA gates are independent sigmoids.
+- Nothing renormalises between layers.
+
+SA-Gate instead fuses with a convex softmax combination, so its scale cannot grow. This explains why L_con, whose intra term pulls F^l back to S̃, matters so much in our runs.
+
+**Test (`afeadx` tier, 3 seeds, unbiased).** It runs AFEA-1..4 without L_con and the full model with:
+
+- `r16_*`: the ISA MLP replaced by the reduction-16 bottleneck of [51], to test whether the problem is gating capacity (10x fewer AFEA parameters);
+- `sag_*`: the original SA-Gate block, a scale-preserving fusion, to test whether the problem is the scale growth.
+
+New runs also log the fusion gain ‖F_fusion^l‖ / mean(‖S̃_wav‖, ‖S̃_fil‖) per layer (`scripts/diagnose.py`).
+
+The outcomes would be read as follows:
+
+- If `sag_` rows improve with depth and beat concat, the paper's implementation probably follows SA-Gate more closely than its equations.
+- If only `r16_` helps, the hidden size of the ISA MLP was the problem.
+- If neither helps, the AFEA gap cannot be closed from the paper's description.

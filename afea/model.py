@@ -151,6 +151,43 @@ class AFEALayer(nn.Module):
                 "ise_weights": a, "isa_w_wav": w_wav, "isa_w_fil": w_fil}
 
 
+class SAGateLayer(nn.Module):
+    """The reference block of [51] (SA-Gate, Chen et al., ECCV 2020), which the paper cites as the
+    inspiration for AFEA, adapted from feature maps [B, C, H, W] to pooled vectors [B, D]
+    (official code: model/SA-Gate.nyu/net_util.py, classes FilterLayer / FSP / SAGate).
+
+    Differences from AFEA as written in Eq. 7-15 (AFEALayer):
+      * the sigmoid MLP comes FIRST (feature separation, FSP) and is an SE-style bottleneck,
+        one MLP per stream with hidden size D / reduction (16 in [51]):
+            W_wav = sigmoid(MLP_wav([F_fil; F_wav])),   rec_wav = F_wav + W_wav * F_fil
+            W_fil = sigmoid(MLP_fil([F_wav; F_fil])),   rec_fil = F_fil + W_fil * F_wav
+      * the softmax gate comes SECOND (feature aggregation), is computed from [rec_wav; rec_fil]
+        and mixes the block INPUTS: merge = A_wav * F_wav + A_fil * F_fil with A_wav + A_fil = 1,
+        a convex combination, so the fused vector keeps the scale of its inputs at every depth
+        (in AFEA, I = S + A * S_other and two independent sigmoid gates let it grow)
+      * outputs: ReLU((F + merge) / 2); the classifier uses `merge` of the last block.
+    The dictionary keys match AFEALayer (softmax weights -> "ise_weights", sigmoid -> "isa_w_*").
+    """
+
+    def __init__(self, dim: int, reduction: int = 16):
+        super().__init__()
+        hidden = max(dim // reduction, 1)
+        self.fsp_wav = nn.Sequential(nn.Linear(2 * dim, hidden), nn.ReLU(inplace=True), nn.Linear(hidden, dim))
+        self.fsp_fil = nn.Sequential(nn.Linear(2 * dim, hidden), nn.ReLU(inplace=True), nn.Linear(hidden, dim))
+        self.gate_wav = nn.Linear(2 * dim, 1)
+        self.gate_fil = nn.Linear(2 * dim, 1)
+
+    def forward(self, f_wav: torch.Tensor, f_fil: torch.Tensor):
+        w_wav = torch.sigmoid(self.fsp_wav(torch.cat([f_fil, f_wav], dim=-1)))     # FSP(guide=fil, main=wav)
+        w_fil = torch.sigmoid(self.fsp_fil(torch.cat([f_wav, f_fil], dim=-1)))
+        rec_wav, rec_fil = f_wav + w_wav * f_fil, f_fil + w_fil * f_wav
+        rec = torch.cat([rec_wav, rec_fil], dim=-1)
+        a = torch.softmax(torch.cat([self.gate_wav(rec), self.gate_fil(rec)], dim=-1), dim=-1)   # [B, 2]
+        merge = a[:, :1] * f_wav + a[:, 1:] * f_fil
+        return {"fusion": merge, "f_wav": F.relu((f_wav + merge) / 2), "f_fil": F.relu((f_fil + merge) / 2),
+                "ise_weights": a, "isa_w_wav": w_wav, "isa_w_fil": w_fil}
+
+
 def make_classifier(in_dim: int, num_classes: int, hidden: int = 512, dropout: float = 0.0) -> nn.Module:
     """FCN head (Eq. 17): Linear(in, 512) -> ReLU -> [Dropout] -> Linear(512, C)."""
     return nn.Sequential(nn.Linear(in_dim, hidden), nn.ReLU(inplace=True),
@@ -168,7 +205,7 @@ class AFEANet(nn.Module):
                  lstm_hidden: int = 256, lstm_dropout: float = 0.5, num_afea_layers: int = 3,
                  isa_hidden: Optional[int] = None, fcn_hidden: int = 512, fcn_dropout: float = 0.0,
                  dropout_pos: str = "pre_pool", wavlm_num_layers: int = 0, isa_mlp: str = "shared",
-                 pooled_norm: str = "none"):
+                 pooled_norm: str = "none", afea_block: str = "afea", sagate_reduction: int = 16):
         super().__init__()
         self.layer_mix = LayerMix(wavlm_num_layers) if wavlm_num_layers > 0 else None
         self.enc_wav = BiLSTMEncoder(wavlm_dim, lstm_hidden, lstm_dropout, dropout_pos)
@@ -180,7 +217,13 @@ class AFEANet(nn.Module):
             raise ValueError(pooled_norm)
         self.norm_wav = nn.LayerNorm(dim) if pooled_norm == "layernorm" else nn.Identity()
         self.norm_fil = nn.LayerNorm(dim) if pooled_norm == "layernorm" else nn.Identity()
-        self.afea = nn.ModuleList([AFEALayer(dim, isa_hidden, isa_mlp) for _ in range(num_afea_layers)])
+        # afea_block = "afea": the paper's AFEA module (Eq. 7-15); "sagate": the SA-Gate block of [51]
+        if afea_block == "afea":
+            self.afea = nn.ModuleList([AFEALayer(dim, isa_hidden, isa_mlp) for _ in range(num_afea_layers)])
+        elif afea_block == "sagate":
+            self.afea = nn.ModuleList([SAGateLayer(dim, sagate_reduction) for _ in range(num_afea_layers)])
+        else:
+            raise ValueError(afea_block)
         cls_in = dim if num_afea_layers > 0 else 2 * dim
         self.classifier = make_classifier(cls_in, num_classes, fcn_hidden, fcn_dropout)
 

@@ -90,3 +90,24 @@ def test_isa_separate_mlps_are_independent_sigmoid_gates():
     model = AFEANet(num_classes=4, lstm_hidden=8, isa_mlp="separate").eval()
     out = model(torch.randn(2, 10, 1024), torch.tensor([10, 6]), torch.randn(2, 20, 40), torch.tensor([20, 9]))
     assert out["logits"].shape == (2, 4)
+
+
+def test_sagate_block_mixes_inputs_convexly_and_keeps_scale():
+    from afea.model import SAGateLayer
+    torch.manual_seed(0)
+    layer = SAGateLayer(32, reduction=16)
+    f_wav, f_fil = torch.rand(6, 32) * 10, torch.rand(6, 32)
+    out = layer(f_wav, f_fil)
+    lo, hi = torch.minimum(f_wav, f_fil), torch.maximum(f_wav, f_fil)
+    assert ((out["fusion"] >= lo - 1e-5) & (out["fusion"] <= hi + 1e-5)).all()   # convex combination
+    assert torch.allclose(out["ise_weights"].sum(-1), torch.ones(6))              # softmax over 2 streams
+    assert out["isa_w_wav"].shape == (6, 32) and (out["f_wav"] >= 0).all()         # sigmoid gates, ReLU out
+    assert layer.fsp_wav[0].out_features == 2                                      # D / 16 bottleneck
+
+
+def test_afea_net_with_sagate_block_and_bottleneck_isa():
+    from afea.model import AFEANet
+    for kw in ({"afea_block": "sagate"}, {"isa_mlp": "separate", "isa_hidden": 4}):
+        m = AFEANet(4, lstm_hidden=16, num_afea_layers=2, **kw)
+        out = m(torch.randn(3, 20, 1024), torch.full((3,), 20), torch.randn(3, 30, 40), torch.full((3,), 30))
+        assert out["logits"].shape == (3, 4) and len(out["f_wav"]) == 2

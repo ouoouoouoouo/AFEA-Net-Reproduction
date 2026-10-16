@@ -23,7 +23,7 @@ import numpy as np  # noqa: E402
 
 from afea.report import ALIASES, PROTOCOLS, paper_table, stats_from_runs  # noqa: E402
 from afea.suite import (PAPER, ablation_configs, diagnosis_configs, protocol_configs,  # noqa: E402
-                        testsel_configs, testsel_wa_configs, testsel_wa_ln_configs, variant_configs,
+                        afea_dx_configs, testsel_configs, testsel_wa_configs, testsel_wa_ln_configs, variant_configs,
                         featnorm_configs, xc_configs)
 
 NAME_RE = re.compile(r"^(iemocap|ravdess)_(.+)_s(\d+)$")
@@ -96,6 +96,8 @@ def tables(data):
             ("Ablations (Table 4/6), unbiased selection", [n for n, _ in ablation_configs(ds)], True),
             ("Assumption variants", [n for n, _ in variant_configs(ds)], False),
             ("Diagnosis experiments", [n for n, _, _ in diagnosis_configs(ds)], False),
+            ("AFEA variants (r16_ = bottleneck ISA MLP of [51], sag_ = SA-Gate block of [51])",
+             [n for n, _, _ in afea_dx_configs(ds)], False),
             ("Feature / pooled-vector normalisation (fn_ = input z-score, ln_ = LayerNorm on pooled vectors)",
              [n for n, _, _ in featnorm_configs(ds)], False),
         ]

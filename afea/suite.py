@@ -174,6 +174,26 @@ def ln_ablation_configs(dataset: str) -> List[Tuple[str, List[str], str]]:
             out.append((name, a + ln, n))
     return out
 
+
+def afea_dx_configs(dataset: str) -> List[Tuple[str, List[str], str]]:
+    """Where does AFEA go wrong? Every AFEA depth without L_con (AFEA-1..4) and the full model, with
+      r16_   the ISA MLP built like the FilterLayer of [51] (the block the paper cites as AFEA's
+             inspiration): one sigmoid MLP per stream with a reduction-16 bottleneck, hidden = D/16 = 32
+             (D = 512), instead of one shared MLP with hidden = D (about 10x fewer AFEA parameters);
+      sag_   the original SA-Gate block of [51] in place of AFEA (sigmoid MLP first, then a softmax gate
+             that mixes the block inputs convexly, ReLU outputs), i.e. a fusion whose scale cannot grow;
+      r16ln_ / sagln_  the same on top of LayerNorm on the pooled vectors (full model only).
+    Unbiased protocol. Reference (column 3) = the same row with the paper's AFEA."""
+    rows = dict(ablation_configs(dataset))
+    r16 = ["--isa_mlp", "separate", "--isa_hidden", "32"]
+    sag = ["--afea_block", "sagate"]
+    ln = ["--pooled_norm", "layernorm"]
+    depths = ("afea1", "afea2", "afea3", "afea4", "afea_net")
+    out = [(f"r16_{n}", rows[n] + r16, n) for n in depths]
+    out += [(f"sag_{n}", rows[n] + sag, n) for n in depths]
+    out += [("r16ln_afea_net", r16 + ln, "ln_afea_net"), ("sagln_afea_net", sag + ln, "ln_afea_net")]
+    return out
+
 # Tables 4 and 6 of the paper: (WA, UAR, P, F1)
 PAPER = {
     "iemocap": {

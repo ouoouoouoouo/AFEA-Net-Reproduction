@@ -63,7 +63,8 @@ def build_model(cfg: Dict) -> nn.Module:
         return AFEANet(cfg["num_classes"], FEAT_DIMS["wavlm"], FEAT_DIMS["fbank"],
                        num_afea_layers=cfg["afea_layers"], isa_hidden=cfg["isa_hidden"],
                        isa_mlp=cfg.get("isa_mlp", "shared"), wavlm_num_layers=n_layers,
-                       pooled_norm=cfg.get("pooled_norm", "none"), **common)
+                       pooled_norm=cfg.get("pooled_norm", "none"), afea_block=cfg.get("afea_block", "afea"),
+                       sagate_reduction=cfg.get("sagate_reduction", 16), **common)
     return SingleStreamNet(cfg["num_classes"], FEAT_DIMS[cfg["model"]],
                            wavlm_num_layers=n_layers if cfg["model"] == "wavlm" else 0, **common)
 
@@ -113,7 +114,10 @@ def batch_diagnostics(out: Dict, y: torch.Tensor, cfg: Dict) -> Dict[str, float]
     d.update({"s_wav_norm": float(sw.norm(dim=-1).mean()), "s_fil_norm": float(sf.norm(dim=-1).mean()),
               "s_nonneg_frac": float(((sw >= 0).float().mean() + (sf >= 0).float().mean()) / 2)})
     d.update(seal_stats(sw, sf, y, cfg["margin"], cfg.get("seal_norm", "l2")))
+    s_ref = (sw.norm(dim=-1).mean() + sf.norm(dim=-1).mean()) / 2
     for l, ex in enumerate(out["afea"], 1):
+        # how much larger the fused vector is than the encoder outputs (1 = same scale)
+        d[f"afea_gain_L{l}"] = float(ex["fusion"].norm(dim=-1).mean() / s_ref.clamp_min(1e-8))
         d[f"ise_a_wav_L{l}"] = float(ex["ise_weights"][:, 0].mean())      # softmax share of WavLM
         d[f"isa_w_wav_L{l}"] = float(ex["isa_w_wav"].mean())              # sigmoid gates
         d[f"isa_w_fil_L{l}"] = float(ex["isa_w_fil"].mean())

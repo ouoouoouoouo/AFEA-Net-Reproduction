@@ -117,6 +117,20 @@ https://doi.org/10.3390/electronics14050844
 - **A-ABL-1 (observation).** In Table 4 the "AFEA-3" row equals the "w/o L_con" row exactly. The same holds in Table 6. We infer that the AFEA-l rows were trained without continuity learning, so `run_ablations.sh` uses `--no_con` for them.
 - **A-ABL-2 (ASSUMED).** The "w/o L_con1/2/3" rows increase monotonically, and "w/o L_con3" equals the full model. This only makes sense if the rows mean "continuity applied up to layer k". `run_ablations.sh` builds them as `--con_weights α 0 0` and `--con_weights α β 0`. The k = 3 case is the full model.
 
+## 7c. AFEA versus its stated inspiration, SA-Gate [51] (diagnostic, not used by default)
+
+`AFEALayer` implements Eq. 7-15 literally. The paper says AFEA is "inspired by [51]" (SA-Gate, Chen et al., ECCV 2020). Eq. 9 even keeps SA-Gate's per-position notation `(p,q)`, which has no meaning for pooled vectors. The official SA-Gate code (`model/SA-Gate.nyu/net_util.py`: FilterLayer / FSP / SAGate) differs from the equations as written in the following ways:
+
+| | AFEA as written (our default) | SA-Gate [51] (`--afea_block sagate`) |
+|---|---|---|
+| Sigmoid MLP | Hidden size not given; ours is D = 512, one shared MLP (about 1.05M parameters per layer). | One MLP per stream with a reduction-16 bottleneck (hidden D/16, about 0.1M parameters per layer); `--isa_mlp separate --isa_hidden 32` gives this MLP inside AFEA. |
+| Order | Softmax gate (ISE) first, sigmoid MLP (ISA) second. | Sigmoid MLP (FSP) first, softmax gate second. |
+| What the softmax gate does | Cross-excitation, I_wav = S_wav + A_fil · S_fil. | A convex merge of the block inputs, A_wav · F_wav + A_fil · F_fil. |
+| Scale of the fused vector | Can grow from layer to layer: summed streams, two independent sigmoid gates. | Bounded by the inputs. |
+| Layer outputs | (F_fusion + F) / 2 | ReLU((F + merge) / 2) |
+
+The paper does not specify the hidden size of the ISA MLP, so our default (hidden = D) is an assumption (M-ISA). With it, three AFEA layers add 3.16M parameters, as many as both BiLSTM encoders together (3.24M); with the bottleneck of [51] they add 0.30M.
+
 ## 8. Known inconsistencies in the paper
 
 - Sec. 4.4.1 says "WA of 75.3% and UAR of 75.1%", while Table 5 and the abstract give WA 75.1 and UAR 75.3. We treat the table as correct.

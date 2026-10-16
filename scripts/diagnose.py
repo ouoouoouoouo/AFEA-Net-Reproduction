@@ -8,7 +8,8 @@ Values are averaged over folds and seeds, taken at the epoch that was selected f
   Fitting        train accuracy vs validation WA at the selected epoch, selected epoch
   SEAL           mean positive / negative pair distance, share of negatives inside the margin,
                  share of non-negative pooled features
-  AFEA           ISE softmax share of WavLM per layer, ISA sigmoid gates of the last layer
+  AFEA           ISE softmax share of WavLM per layer, ISA sigmoid gates of the last layer,
+                 continuity terms of the last layer, fusion gain = ‖F_fusion‖ / mean(‖S_wav‖, ‖S_fil‖) per layer
   Gradients      gradient norm per module (enc_wav, enc_fil, afea, classifier, layer_mix)
   Layers         top WavLM layers by learned weight (weighted-sum runs)
 """
@@ -84,8 +85,8 @@ def main():
 
         out += ["", "### AFEA internals and gradients", "",
                 "| config | ISE A_wav L1/L2/L3 | ISA W_wav / W_fil (last) | con intra / inter (last) | "
-                "grad enc_wav | grad enc_fil | grad afea | grad classifier |",
-                "|---|---|---|---|---|---|---|---|"]
+                "fusion gain per layer | grad enc_wav | grad enc_fil | grad afea | grad classifier |",
+                "|---|---|---|---|---|---|---|---|---|"]
         for name, recs in rows.items():
             g = lambda k: mean([s.get(k) for _, s in recs])  # noqa: E731
             layers = sorted({int(k.split("_L")[1]) for _, s in recs for k in s if k.startswith("diag/ise_a_wav_L")})
@@ -93,8 +94,10 @@ def main():
             last = layers[-1] if layers else None
             isa = f"{f(g(f'diag/isa_w_wav_L{last}'))} / {f(g(f'diag/isa_w_fil_L{last}'))}" if last else "–"
             con = f"{f(g(f'diag/con_intra_L{last}'))} / {f(g(f'diag/con_inter_L{last}'))}" if last else "–"
+            has_gain = any("diag/afea_gain_L1" in s for _, s in recs)   # logged since the afeadx tier
+            gain = " / ".join(f(g(f"diag/afea_gain_L{l}")) for l in layers) if has_gain else "–"
             enc_w = g("diag/grad_enc_wav") if g("diag/grad_enc_wav") is not None else g("diag/grad_enc")
-            out.append(f"| {name} | {ise} | {isa} | {con} | {f(enc_w)} | {f(g('diag/grad_enc_fil'))} | "
+            out.append(f"| {name} | {ise} | {isa} | {con} | {gain} | {f(enc_w)} | {f(g('diag/grad_enc_fil'))} | "
                        f"{f(g('diag/grad_afea'))} | {f(g('diag/grad_classifier'))} |")
 
         lw_rows = [(n, [r["layer_weights"] for r, _ in recs if r.get("layer_weights")]) for n, recs in rows.items()]

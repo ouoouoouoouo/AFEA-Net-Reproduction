@@ -34,8 +34,10 @@ ALIASES = {
 
 
 def paper_table(stats: Dict[str, Dict], dataset: str, protocol: str) -> Tuple[List[str], str]:
-    """Return (markdown lines, LaTeX string). Missing rows are shown as '–'."""
-    if not stats:
+    """Return (markdown lines, LaTeX string). Missing rows are shown as '–'. A protocol whose only rows
+    are ones borrowed from another protocol (e.g. plain Fbank / WavLM in `ln`) gets no table."""
+    prefix = PROTOCOLS[protocol][0]
+    if not stats or (prefix and all(run_name(protocol, n) == n for n in stats)):
         return [], ""
     _, desc = PROTOCOLS[protocol]
     paper = PAPER.get(dataset, {})

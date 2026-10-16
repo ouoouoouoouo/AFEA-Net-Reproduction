@@ -398,6 +398,7 @@ Unbiased means 4 training sessions, 10 % of them used for epoch selection, and t
 
   The gains therefore come from SEAL and L_con acting together on top of AFEA, not from AFEA alone.
 - **The absolute level stays about 2.8 WA below the paper (72.3 vs 75.1).** About 2 points of this is the gap between unbiased and test-session epoch selection (see `tw` / `twln`). Under test selection with LayerNorm, AFEA-Net reaches 74.2, but there the relative gains shrink to +0.1.
+
 ## Cross-corpus test: trained on IEMOCAP, tested on THAI SER
 
 Training is the unbiased IEMOCAP protocol. Each of the 5 fold models is tested on THAI SER: 17,321 utterances whose `majority_emo` maps onto the 4 IEMOCAP classes (neu 42 %, hap 23 %, ang 18 %, sad 16 %). Values are means over 3 seeds; the ± values are std over seeds. "vote" is the majority vote of the 5 fold models.

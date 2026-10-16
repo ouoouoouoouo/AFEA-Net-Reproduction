@@ -360,6 +360,44 @@ Under "valid = test" with WA selection, 5 seeds:
 - **What LayerNorm actually changes:** it makes the full model's *selected* epoch better and more stable. Its std drops from 0.5 to 0.2, and its gain from test selection drops from +2.3 to +1.9, whereas concat still gains +3.0. It does not raise the model's best epoch above concat's.
 - **The continuity loss is the only component that helps consistently,** by +0.5 to +1.1 in every protocol.
 
+## Full ablation table with LayerNorm on the pooled vectors, unbiased selection (`ln`, 5 seeds)
+
+Unbiased means 4 training sessions, 10 % of them used for epoch selection, and the held-out session used only for testing. Fbank and WavLM are single-stream models; LayerNorm does not apply to them, so their plain runs are shown.
+
+| Row | Without LN | With LN | Paper |
+|---|---|---|---|
+| WavLM | 71.7 | 71.7 | 72.8 |
+| w/o L_ali | 71.5 | 71.5 | 74.0 |
+| w/o AFEA | 71.5 | 71.1 ± 1.2 | 73.9 |
+| AFEA-1 | 70.6 | 70.8 | 74.3 |
+| AFEA-2 | 70.3 | 69.6 | 74.5 |
+| AFEA-3 (= w/o L_con) | 69.8 | 70.1 | 74.6 |
+| AFEA-4 | 69.9 | 69.6 | 74.4 |
+| w/o L_con1 | 71.3 | 71.2 | 74.7 |
+| w/o L_con2 | 71.1 | 71.6 | 74.8 |
+| AFEA-Net | 71.1 | **72.3 ± 0.2** | 75.1 |
+
+| Comparison | Paper | Without LN | With LN |
+|---|---|---|---|
+| SEAL: AFEA-Net − w/o L_ali | +1.1 | −0.4 | **+0.8** |
+| AFEA: AFEA-Net − w/o AFEA | +1.2 | −0.4 | **+1.2** |
+| L_con: AFEA-Net − AFEA-3 | +0.5 | +1.3 | +2.2 |
+| Continuity on 1 → 2 → 3 layers | 74.7 → 74.8 → 75.1 | 71.3 → 71.1 → 71.1 | **71.2 → 71.6 → 72.3** |
+| Depth: AFEA-1 → AFEA-4 (no L_con) | rises up to 3 layers | falls | falls / flat |
+| AFEA-Net − WavLM | +2.3 | −0.6 | +0.6 |
+
+**Findings**
+
+- **With LayerNorm, AFEA-Net is the best row in every column, as in the paper.** Three relative claims of the paper reproduce under unbiased selection:
+  - SEAL helps (+0.8; the standard error of the difference is about 0.3);
+  - AFEA helps over concatenation (+1.2; about 0.5, because concat is unstable with std 1.2);
+  - continuity applied to more layers helps monotonically.
+- **Two claims still do not reproduce.**
+  - Without L_con, stacking AFEA layers does not help: AFEA-1 to AFEA-4 are all below concat.
+  - Every dual-stream row except AFEA-Net is at or below WavLM alone.
+
+  The gains therefore come from SEAL and L_con acting together on top of AFEA, not from AFEA alone.
+- **The absolute level stays about 2.8 WA below the paper (72.3 vs 75.1).** About 2 points of this is the gap between unbiased and test-session epoch selection (see `tw` / `twln`). Under test selection with LayerNorm, AFEA-Net reaches 74.2, but there the relative gains shrink to +0.1.
 ## Cross-corpus test: trained on IEMOCAP, tested on THAI SER
 
 Training is the unbiased IEMOCAP protocol. Each of the 5 fold models is tested on THAI SER: 17,321 utterances whose `majority_emo` maps onto the 4 IEMOCAP classes (neu 42 %, hap 23 %, ang 18 %, sad 16 %). Values are means over 3 seeds; the ± values are std over seeds. "vote" is the majority vote of the 5 fold models.

@@ -96,3 +96,11 @@ def test_ln_ablation_reuses_existing_layernorm_runs_and_table_aliases():
     assert run_name("ln", "wo_con") == run_name("ln", "afea3") == "ln_afea3_nocon"
     assert run_name("ln", "wavlm") == "wavlm" and run_name("ln", "afea1") == "ln_afea1"
     assert run_name("tw", "afea1") == "tw_afea1"
+
+
+def test_paper_table_skips_protocol_with_only_borrowed_rows():
+    from afea.report import paper_table
+    st = {k: (70.0, 0.5) for k in ("WA", "UAR", "P", "F1")}
+    assert paper_table({"fbank": dict(st, n=5), "wavlm": dict(st, n=5)}, "ravdess", "ln") == ([], "")
+    md, tex = paper_table({"wavlm": dict(st, n=5), "afea_net": dict(st, n=5)}, "iemocap", "ln")
+    assert md and tex

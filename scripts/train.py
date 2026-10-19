@@ -49,10 +49,16 @@ def parse_args():
     ap.add_argument("--afea_block", choices=["afea", "sagate"], default="afea",
                     help="afea: the paper's AFEA module (Eq. 7-15); sagate: the SA-Gate block of [51] that the "
                          "paper cites as AFEA's inspiration (diagnostic)")
+    ap.add_argument("--afea_avg", choices=["prev", "input"], default="prev",
+                    help="each AFEA layer averages its fused feature with prev: the layer input F^(l-1) "
+                         "(Sec. 3.2/3.3 text, default) or input: the pooled encoder output S~ (Eq. 14-15 as printed)")
     ap.add_argument("--sagate_reduction", type=int, default=16, help="MLP bottleneck of the SA-Gate block (D / r)")
     ap.add_argument("--fcn_hidden", type=int, default=d["fcn_hidden"])
     ap.add_argument("--fcn_dropout", type=float, default=d["fcn_dropout"])
     ap.add_argument("--val_ratio", type=float, default=d["val_ratio"])
+    ap.add_argument("--val_split", choices=["random", "speaker"], default="random",
+                    help="random: stratified utterances of the training folds (default); speaker: hold out whole "
+                         "training speakers, so validation is speaker-independent like the test fold")
     ap.add_argument("--select", choices=["val", "last", "test"], default=d["select"],
                     help="val: best validation epoch (unbiased); last: final epoch; test: best test-UAR "
                          "epoch (common IEMOCAP practice, optimistic - report it as such)")

@@ -133,6 +133,15 @@ The paper does not specify the hidden size of the ISA MLP, so our default (hidde
 
 Outcome (RESULTS.md, `afeadx`): the bottleneck adds +0.3 to +0.6 WA. The SA-Gate block keeps the fused scale at about 1×, but without L_con its softmax gates collapse onto one stream. Neither reproduces the paper's AFEA-1..4 trend, so the default stays the paper's equations with hidden = D.
 
+## 7d. What each AFEA layer averages with (ambiguous in the paper)
+
+Layer l always takes the previous layer's outputs F^(l-1)_wav and F^(l-1)_fil as its input, with F^0 = S̃; this was verified with forward hooks. The paper is ambiguous about the averaging step, however:
+
+- **Text** (Sec. 3.2: "averaging operation applied to the fused feature and the input features F^(l-1)"; Sec. 3.3: "averaging the fusion feature with the previous layer's F^(l-1)"): F^l = (F^l_fusion + F^(l-1)) / 2. This is our default, `--afea_avg prev`.
+- **Eq. 14-15 as printed** ("averaged with the original input features"): F^l = (F^l_fusion + S̃) / 2 for every layer, `--afea_avg input`. This keeps every layer anchored to the encoder output, as the intra-continuity loss also does.
+
+The two readings coincide for layers 1 and 2, so AFEA-1 and AFEA-2 without L_con are identical under both. They differ from layer 3 on, and in L_con from layer 2 on.
+
 ## 8. Known inconsistencies in the paper
 
 - Sec. 4.4.1 says "WA of 75.3% and UAR of 75.1%", while Table 5 and the abstract give WA 75.1 and UAR 75.3. We treat the table as correct.

@@ -205,7 +205,8 @@ class AFEANet(nn.Module):
                  lstm_hidden: int = 256, lstm_dropout: float = 0.5, num_afea_layers: int = 3,
                  isa_hidden: Optional[int] = None, fcn_hidden: int = 512, fcn_dropout: float = 0.0,
                  dropout_pos: str = "pre_pool", wavlm_num_layers: int = 0, isa_mlp: str = "shared",
-                 pooled_norm: str = "none", afea_block: str = "afea", sagate_reduction: int = 16):
+                 pooled_norm: str = "none", afea_block: str = "afea", sagate_reduction: int = 16,
+                 afea_avg: str = "prev"):
         super().__init__()
         self.layer_mix = LayerMix(wavlm_num_layers) if wavlm_num_layers > 0 else None
         self.enc_wav = BiLSTMEncoder(wavlm_dim, lstm_hidden, lstm_dropout, dropout_pos)
@@ -224,6 +225,15 @@ class AFEANet(nn.Module):
             self.afea = nn.ModuleList([SAGateLayer(dim, sagate_reduction) for _ in range(num_afea_layers)])
         else:
             raise ValueError(afea_block)
+        # What each AFEA layer averages its fused feature with (the paper is ambiguous):
+        #   "prev"  (default, Sec. 3.2 / 3.3 text): F^l = (F^l_fusion + F^{l-1}) / 2
+        #   "input" (Eq. 14-15 as printed):         F^l = (F^l_fusion + S~) / 2 for every layer
+        # Either way, layer l+1 takes F^l as its input.
+        if afea_avg not in ("prev", "input"):
+            raise ValueError(afea_avg)
+        if afea_avg == "input" and afea_block != "afea":
+            raise ValueError("afea_avg='input' is defined for the paper's AFEA block only")
+        self.afea_avg = afea_avg
         cls_in = dim if num_afea_layers > 0 else 2 * dim
         self.classifier = make_classifier(cls_in, num_classes, fcn_hidden, fcn_dropout)
 
@@ -250,6 +260,8 @@ class AFEANet(nn.Module):
         else:
             for layer in self.afea:
                 out = layer(f_wav, f_fil)
+                if self.afea_avg == "input":
+                    out["f_wav"], out["f_fil"] = (out["fusion"] + s_wav) / 2, (out["fusion"] + s_fil) / 2
                 f_wav, f_fil, fused = out["f_wav"], out["f_fil"], out["fusion"]
                 f_wav_list.append(f_wav)
                 f_fil_list.append(f_fil)

@@ -37,13 +37,25 @@ def set_seed(seed: int) -> None:
     torch.cuda.manual_seed_all(seed)
 
 
-def split_fold(rows: List[Dict], test_fold: int, val_ratio: float, seed: int):
+def split_fold(rows: List[Dict], test_fold: int, val_ratio: float, seed: int, val_split: str = "random"):
     """Test = one fold (IEMOCAP session / RAVDESS actor group); train = the other folds.
-    Optionally carve a stratified validation subset out of the training folds."""
+    Optionally carve a validation subset out of the training folds:
+      val_split="random"  (default) stratified random utterances (same speakers as training);
+      val_split="speaker" every utterance of round(val_ratio * #training speakers) held-out speakers
+                          (at least 1; IEMOCAP: 1 of the 8 training speakers), so that epoch selection,
+                          like the test fold, sees only unseen speakers."""
     test = [r for r in rows if r["fold"] == test_fold]
     train = [r for r in rows if r["fold"] != test_fold]
     val: List[Dict] = []
-    if val_ratio > 0:
+    if val_ratio > 0 and val_split == "speaker":
+        speakers = sorted({r["speaker"] for r in train})
+        if len(speakers) < 2 or any(not r.get("speaker") for r in train):
+            raise ValueError("val_split='speaker' needs a speaker id for every training utterance")
+        n_val = max(1, round(val_ratio * len(speakers)))
+        held = set(random.Random(seed * 1000 + test_fold).sample(speakers, n_val))
+        val = [r for r in train if r["speaker"] in held]
+        train = [r for r in train if r["speaker"] not in held]
+    elif val_ratio > 0:
         from sklearn.model_selection import train_test_split
         train, val = train_test_split(train, test_size=val_ratio, random_state=seed,
                                       stratify=[r["label_id"] for r in train])
@@ -64,7 +76,8 @@ def build_model(cfg: Dict) -> nn.Module:
                        num_afea_layers=cfg["afea_layers"], isa_hidden=cfg["isa_hidden"],
                        isa_mlp=cfg.get("isa_mlp", "shared"), wavlm_num_layers=n_layers,
                        pooled_norm=cfg.get("pooled_norm", "none"), afea_block=cfg.get("afea_block", "afea"),
-                       sagate_reduction=cfg.get("sagate_reduction", 16), **common)
+                       sagate_reduction=cfg.get("sagate_reduction", 16), afea_avg=cfg.get("afea_avg", "prev"),
+                       **common)
     return SingleStreamNet(cfg["num_classes"], FEAT_DIMS[cfg["model"]],
                            wavlm_num_layers=n_layers if cfg["model"] == "wavlm" else 0, **common)
 
@@ -182,7 +195,8 @@ def train_fold(rows: List[Dict], test_fold: int, cfg: Dict, seed: int, device, l
     prefix = f"fold{test_fold}_s{seed}"
     if wandb_run is not None:
         wandb_run.define_metric(f"{prefix}/*", step_metric=f"{prefix}/epoch")
-    train_rows, val_rows, test_rows = split_fold(rows, test_fold, cfg["val_ratio"], seed)
+    train_rows, val_rows, test_rows = split_fold(rows, test_fold, cfg["val_ratio"], seed,
+                                                 cfg.get("val_split", "random"))
     norm_stats = None
     if cfg.get("feat_norm", "none") == "global":   # statistics from the training rows of this fold only
         norm_stats = compute_norm_stats(train_rows, cfg["feat_root"], streams_for(cfg), cfg.get("cache", False))

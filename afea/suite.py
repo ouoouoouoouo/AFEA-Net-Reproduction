@@ -194,6 +194,29 @@ def afea_dx_configs(dataset: str) -> List[Tuple[str, List[str], str]]:
     out += [("r16ln_afea_net", r16 + ln, "ln_afea_net"), ("sagln_afea_net", sag + ln, "ln_afea_net")]
     return out
 
+
+def improve_configs(dataset: str) -> List[Tuple[str, List[str], str]]:
+    """Candidate improvements (IEMOCAP, unbiased protocol; reference in column 3, same seeds):
+      avgin_  every AFEA layer averages its fused feature with the encoder output S~ (Eq. 14-15 as
+              printed) instead of with the previous layer's F^(l-1) (the text; our default). Layer 2's
+              fused vector is identical in both readings, so AFEA-2 is not run.
+      spk_    speaker-independent validation: epoch selection on whole held-out training speakers
+              (IEMOCAP: 1 of 8) instead of random utterances of the training speakers.
+      cmb_    combinations with the learnable weighted sum of all WavLM layers (+2 to +3 WA so far):
+              + LayerNorm, + SA-Gate block, + LayerNorm and speaker-independent validation.
+              These need features/<dataset>/wavlm_all."""
+    rows = dict(ablation_configs(dataset))
+    avg, spk, ln = ["--afea_avg", "input"], ["--val_split", "speaker"], ["--pooled_norm", "layernorm"]
+    wsum = ["--wavlm_layers", "all"]
+    out = [(f"avgin_{n}", rows[n] + avg, n) for n in ("afea3", "afea4", "afea_net")]
+    out += [("avgin_ln_afea_net", avg + ln, "ln_afea_net")]
+    out += [(f"spk_{n}", rows[n] + spk, n) for n in ("wavlm", "wo_afea", "afea_net")]
+    out += [("spk_ln_afea_net", spk + ln, "ln_afea_net")]
+    out += [("cmb_wsum_ln_afea_net", wsum + ln, "wsum_afea_net"),
+            ("cmb_wsum_sag_afea_net", wsum + ["--afea_block", "sagate"], "wsum_afea_net"),
+            ("cmb_wsum_ln_spk_afea_net", wsum + ln + spk, "wsum_afea_net")]
+    return out
+
 # Tables 4 and 6 of the paper: (WA, UAR, P, F1)
 PAPER = {
     "iemocap": {

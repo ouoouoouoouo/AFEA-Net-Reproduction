@@ -111,3 +111,22 @@ def test_afea_net_with_sagate_block_and_bottleneck_isa():
         m = AFEANet(4, lstm_hidden=16, num_afea_layers=2, **kw)
         out = m(torch.randn(3, 20, 1024), torch.full((3,), 20), torch.randn(3, 30, 40), torch.full((3,), 30))
         assert out["logits"].shape == (3, 4) and len(out["f_wav"]) == 2
+
+
+def test_afea_avg_input_anchors_every_layer_to_the_encoder_output():
+    import pytest
+    from afea.model import AFEANet
+    torch.manual_seed(0)
+    a = AFEANet(4, lstm_hidden=16, num_afea_layers=3).eval()
+    b = AFEANet(4, lstm_hidden=16, num_afea_layers=3, afea_avg="input").eval()
+    b.load_state_dict(a.state_dict())
+    x = (torch.randn(2, 20, 1024), torch.full((2,), 20), torch.randn(2, 30, 40), torch.full((2,), 30))
+    oa, ob = a(*x), b(*x)
+    # layers 1-2 see the same inputs in both readings; layer 3 does not
+    assert torch.allclose(oa["afea"][1]["fusion"], ob["afea"][1]["fusion"])
+    assert not torch.allclose(oa["afea"][2]["fusion"], ob["afea"][2]["fusion"])
+    for l in range(3):
+        assert torch.allclose(ob["f_wav"][l], (ob["afea"][l]["fusion"] + ob["s_wav"]) / 2)
+    assert torch.allclose(oa["f_wav"][2], (oa["afea"][2]["fusion"] + oa["f_wav"][1]) / 2)
+    with pytest.raises(ValueError):
+        AFEANet(4, lstm_hidden=16, afea_block="sagate", afea_avg="input")

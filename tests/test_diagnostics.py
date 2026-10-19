@@ -209,3 +209,24 @@ def test_afea_dx_tier_and_fusion_gain_diagnostic(tmp_path):
     out = m(torch.randn(3, 20, 1024), torch.full((3,), 20), torch.randn(3, 30, 40), torch.full((3,), 30))
     d = batch_diagnostics(out, torch.tensor([0, 1, 2]), _cfg(tmp_path))
     assert {"afea_gain_L1", "afea_gain_L2", "afea_gain_L3"} <= set(d) and d["afea_gain_L1"] > 0
+
+
+def test_speaker_independent_validation_split_and_improve_tier(tmp_path):
+    from afea.suite import improve_configs
+    from afea.trainer import split_fold
+    rows = [{"utt_id": f"u{i}", "label_id": i % 4, "fold": s, "speaker": f"Ses{s:02d}{g}"}
+            for s in range(1, 6) for g in "FM" for i in range(20)]
+    tr, va, te = split_fold(rows, 2, 0.1, seed=42, val_split="speaker")
+    spk_tr, spk_va = {r["speaker"] for r in tr}, {r["speaker"] for r in va}
+    assert len(spk_va) == 1 and not spk_tr & spk_va and len(spk_tr) == 7     # 1 of 8 training speakers
+    assert {r["fold"] for r in te} == {2} and len(tr) + len(va) + len(te) == len(rows)
+    assert split_fold(rows, 2, 0.1, seed=42, val_split="speaker")[1] == va    # reproducible
+    cfgs = {n: (a, r) for n, a, r in improve_configs("iemocap")}
+    assert len(cfgs) == 11 and "avgin_afea2" not in cfgs
+    assert cfgs["spk_afea_net"] == (["--val_split", "speaker"], "afea_net")
+    assert all("--wavlm_layers" in a for n, (a, _) in cfgs.items() if n.startswith("cmb_"))
+    syn = _synthetic(tmp_path)
+    for i, r in enumerate(syn):
+        r["speaker"] = f"spk{i % 6}"
+    res = run_cv(syn, _cfg(tmp_path, afea_avg="input", val_split="speaker", val_ratio=0.2), folds=[1], device="cpu")
+    assert set(res["fold_mean"]) == {"WA", "UAR", "P", "F1"}

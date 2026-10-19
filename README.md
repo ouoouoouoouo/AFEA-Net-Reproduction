@@ -224,6 +224,12 @@ The `lnab` tier runs every dual-stream ablation row with LayerNorm on the pooled
 python scripts/run_suite.py --gpus 0 1 2 3 --jobs_per_gpu 2 --tiers afeadx --datasets iemocap --diag_seeds 42 1 2
 ```
 
+The `improve` tier tries candidate improvements, each against the same row without the change:
+
+- `avgin_*`: the Eq. 14-15 reading of the AFEA averaging step (`--afea_avg input`, ASSUMPTIONS.md 7d).
+- `spk_*`: speaker-independent validation (`--val_split speaker`), where whole training speakers are held out for epoch selection.
+- `cmb_*`: combinations of the WavLM layer weighted sum with LayerNorm, the SA-Gate block, or speaker-independent validation. These need `features/iemocap/wavlm_all`.
+
 | Protocol | Runs | How the epoch is chosen |
 |---|---|---|
 | `unbiased` | original | on a validation split of the training sessions |

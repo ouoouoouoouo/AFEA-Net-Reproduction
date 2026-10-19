@@ -131,6 +131,8 @@ https://doi.org/10.3390/electronics14050844
 
 The paper does not specify the hidden size of the ISA MLP, so our default (hidden = D) is an assumption (M-ISA). With it, three AFEA layers add 3.16M parameters, as many as both BiLSTM encoders together (3.24M); with the bottleneck of [51] they add 0.30M.
 
+Outcome (RESULTS.md, `afeadx`): the bottleneck adds +0.3 to +0.6 WA. The SA-Gate block keeps the fused scale at about 1×, but without L_con its softmax gates collapse onto one stream. Neither reproduces the paper's AFEA-1..4 trend, so the default stays the paper's equations with hidden = D.
+
 ## 8. Known inconsistencies in the paper
 
 - Sec. 4.4.1 says "WA of 75.3% and UAR of 75.1%", while Table 5 and the abstract give WA 75.1 and UAR 75.3. We treat the table as correct.

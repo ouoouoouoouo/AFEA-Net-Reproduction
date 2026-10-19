@@ -437,3 +437,34 @@ The outcomes would be read as follows:
 - If `sag_` rows improve with depth and beat concat, the paper's implementation probably follows SA-Gate more closely than its equations.
 - If only `r16_` helps, the hidden size of the ISA MLP was the problem.
 - If neither helps, the AFEA gap cannot be closed from the paper's description.
+
+### Result of the `afeadx` tier (IEMOCAP, 3 seeds, unbiased; references use the same seeds)
+
+| Depth | Paper's AFEA (as written) | `r16_` bottleneck ISA MLP | `sag_` SA-Gate block | Paper |
+|---|---|---|---|---|
+| AFEA-1 (no L_con) | 70.5 | 71.0 ± 0.4 | 70.6 ± 1.7 | 74.3 |
+| AFEA-2 (no L_con) | 70.4 | 70.7 ± 0.2 | **60.9 ± 4.1** (collapse) | 74.5 |
+| AFEA-3 (no L_con) | 70.0 | 70.3 ± 0.6 | 71.9 ± 0.4 | 74.6 |
+| AFEA-4 (no L_con) | 70.3 | 70.7 ± 0.1 | **66.7 ± 2.2** (collapse) | 74.4 |
+| AFEA-Net (with L_con) | 71.3 | 71.9 ± 0.3 | **72.3 ± 0.1** | 75.1 |
+| AFEA-Net + LayerNorm | 72.1 | 71.8 ± 0.4 | 72.3 ± 0.2 | – |
+
+On the same seeds, concat (w/o AFEA) reaches 71.4 and WavLM alone 71.4.
+
+**Fusion gain** ‖F_fusion^l‖ / mean(‖S̃_wav‖, ‖S̃_fil‖), layers 1 → 4:
+
+| Variant | No L_con | With L_con |
+|---|---|---|
+| Paper's equations with `r16_` MLP | 1.62 → 2.15 → 3.09 → 4.94 | 0.92 → 1.24 → 1.96 |
+| SA-Gate block | 1.04 → 1.06 → 1.03 → 1.03 | 0.94 → 1.06 → 1.05 |
+
+**Findings**
+
+1. **The scale-growth mechanism is confirmed directly.** With the paper's equations, the fused vector is already 1.6–1.9× larger than the encoder outputs after one layer and about 5× after four. L_con holds it to about 2×. The SA-Gate block keeps it at about 1×, as designed.
+2. **The size of the ISA MLP is not the cause.** The bottleneck of [51] gives a small, consistent gain (+0.3 to +0.6 WA at every depth; AFEA-Net 71.9 vs 71.3), but accuracy still does not rise with depth, and every AFEA-k row stays below concat.
+3. **Bounding the scale exposes a second failure: gate collapse.** Without L_con, the SA-Gate softmax gates saturate and act as a hard stream selector with zero gradient (AFEA gradient norm 0.000).
+   - When the selector picks WavLM, the model behaves like WavLM alone. AFEA-3 reaches 71.9, but shuffling the Fbank vector costs only 0.6 WA, so Fbank is ignored.
+   - When it picks Fbank, the run collapses to Fbank-level accuracy. For AFEA-2 the mean WavLM share is 0.33 at both layers, and shuffling Fbank costs more (−15.5) than shuffling WavLM (−11.0). A mean of 60.9 is consistent with about two thirds of the 15 fold runs collapsing to ~55 WA.
+4. **With L_con, every variant is stable, and the SA-Gate block is the best and most stable full model.** It reaches 72.3 ± 0.1, matching LayerNorm (72.3); combining the two adds nothing.
+
+**Conclusion.** Neither the equations as written, nor the bottleneck MLP, nor the SA-Gate block reproduces the paper's AFEA-1..4 trend (above concat, improving up to 3 layers). In all three, the stacked fusion is only useful when L_con regularises it: L_con limits the scale growth of the written equations and prevents the gate collapse of SA-Gate. The missing ingredient is therefore unlikely to be a detail of the AFEA block that can be inferred from the paper or from [51]. The best unbiased AFEA-Net in this reproduction is about 72.3 WA (+0.6 over WavLM alone), with LayerNorm on the pooled vectors or with the SA-Gate block.

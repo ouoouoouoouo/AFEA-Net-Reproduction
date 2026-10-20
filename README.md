@@ -230,6 +230,13 @@ The `improve` tier tries candidate improvements, each against the same row witho
 - `spk_*`: speaker-independent validation (`--val_split speaker`), where whole training speakers are held out for epoch selection.
 - `cmb_*`: combinations of the WavLM layer weighted sum with LayerNorm, the SA-Gate block, or speaker-independent validation. These need `features/iemocap/wavlm_all`.
 
+The `best` tier runs the strongest IEMOCAP settings (all built on the WavLM layer weighted sum) on any dataset. It includes their speaker-independent-validation variants (`spk_*`) and their test-WA-selection variants (`tw_*`). Config names and arguments match the IEMOCAP runs, so finished runs are reused. For example, on RAVDESS:
+
+```bash
+python scripts/extract_features.py --manifest manifests/ravdess.csv --out features/ravdess --streams wavlm_all --device cuda
+python scripts/run_suite.py --gpus 0 1 2 3 --jobs_per_gpu 2 --tiers best --datasets ravdess --seeds 42 1 2 3 4
+```
+
 | Protocol | Runs | How the epoch is chosen |
 |---|---|---|
 | `unbiased` | original | on a validation split of the training sessions |

@@ -230,3 +230,17 @@ def test_speaker_independent_validation_split_and_improve_tier(tmp_path):
         r["speaker"] = f"spk{i % 6}"
     res = run_cv(syn, _cfg(tmp_path, afea_avg="input", val_split="speaker", val_ratio=0.2), folds=[1], device="cpu")
     assert set(res["fold_mean"]) == {"WA", "UAR", "P", "F1"}
+
+
+def test_best_tier_reuses_iemocap_config_names_and_args():
+    from afea.suite import best_configs, diagnosis_configs, improve_configs
+    for ds in ("iemocap", "ravdess"):
+        known = {n: a for n, a, _ in diagnosis_configs(ds) + improve_configs(ds)}
+        cfgs = {n: (a, r) for n, a, r in best_configs(ds)}
+        assert len(cfgs) == 10
+        for n in ("wsum_wavlm", "fix_wavlm", "fix_wo_afea", "fix_afea_net", "cmb_wsum_sag_afea_net"):
+            assert cfgs[n][0] == known[n]                      # same name -> same arguments
+        assert all("--wavlm_layers" in a and "all" in a for a, _ in cfgs.values())
+        assert cfgs["tw_fix_wo_afea"] == (known["fix_wo_afea"] + ["--select", "test", "--val_ratio", "0",
+                                                                  "--test_select_metric", "wa"], "fix_wo_afea")
+        assert cfgs["spk_fix_wavlm"][0][-2:] == ["--val_split", "speaker"]

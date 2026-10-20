@@ -233,6 +233,29 @@ def improve_configs(dataset: str) -> List[Tuple[str, List[str], str]]:
             ("cmb_wsum_ln_spk_afea_net", wsum + ln + spk, "wsum_afea_net")]
     return out
 
+
+def best_configs(dataset: str) -> List[Tuple[str, List[str], str]]:
+    """The strongest settings found on IEMOCAP, all built on the learnable weighted sum of every
+    WavLM layer (needs features/<dataset>/wavlm_all), packaged to run on another dataset (RAVDESS):
+      wsum_wavlm, fix_wavlm      single-stream WavLM (fix_ = dropout after pooling)
+      fix_wo_afea, fix_afea_net  + Fbank by concatenation / by the paper's AFEA (dropout after pooling)
+      cmb_wsum_sag_afea_net      + Fbank through the SA-Gate block
+      spk_fix_*                  the same with speaker-independent validation (on RAVDESS the random
+                                 validation split shares actors and sentences with training)
+      tw_fix_*                   the same with the epoch picked by test WA ("valid = test"), for
+                                 comparison with the paper's numbers
+    Names and arguments are identical to the IEMOCAP diag / improve configs, so finished IEMOCAP runs
+    are reused. Reference (column 3): the final-layer row for the first five; for spk_ / tw_ the same
+    config with random validation."""
+    by_name = {n: a for n, a, _ in diagnosis_configs(dataset) + improve_configs(dataset)}
+    out = [(n, by_name[n], ref) for n, ref in (("wsum_wavlm", "wavlm"), ("fix_wavlm", "wavlm"),
+                                                ("fix_wo_afea", "wo_afea"), ("fix_afea_net", "afea_net"),
+                                                ("cmb_wsum_sag_afea_net", "afea_net"))]
+    out += [(f"spk_{n}", by_name[n] + ["--val_split", "speaker"], n) for n in ("fix_wavlm", "fix_wo_afea")]
+    tw = ["--select", "test", "--val_ratio", "0", "--test_select_metric", "wa"]
+    out += [(f"tw_{n}", by_name[n] + tw, n) for n in ("fix_wavlm", "fix_wo_afea", "fix_afea_net")]
+    return out
+
 # Tables 4 and 6 of the paper: (WA, UAR, P, F1)
 PAPER = {
     "iemocap": {

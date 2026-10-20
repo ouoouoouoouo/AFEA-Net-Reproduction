@@ -12,7 +12,7 @@ import _path  # noqa: F401
 import numpy as np
 
 from afea.report import PROTOCOLS, paper_table, run_name, stats_from_runs
-from afea.suite import (PAPER, PAPER_ROW_NAMES, ablation_configs, afea_dx_configs, diagnosis_configs,
+from afea.suite import (PAPER, PAPER_ROW_NAMES, ablation_configs, afea_dx_configs, best_configs, diagnosis_configs,
                         featnorm_configs, improve_configs, ln_ablation_configs, protocol_configs, sweep_configs,
                         testsel_configs, testsel_wa_configs, testsel_wa_ln_configs, variant_configs)
 
@@ -58,8 +58,7 @@ def diagnosis_table(ds, cfg_fn=diagnosis_configs):
              "|---|---|---|---|---|---|---|---|---|"]
     for name, args, ref in cfg_fn(ds):
         runs = load(ds, name)
-        if not runs:
-            lines.append(f"| {name} | `{' '.join(args)}` | 0 | – | – | – | {ref} | – | – |")
+        if not runs:   # not run (yet) for this dataset
             continue
         ref_runs = {s: v for s, v in load(ds, ref).items() if s in runs}
         if ref_runs:
@@ -156,6 +155,11 @@ def main():
             out += ["### Candidate improvements (avgin_ = Eq. 14-15 averaging with S~, spk_ = speaker-independent "
                     "validation, cmb_ = combinations with the WavLM layer weighted sum; Δ vs reference, same seeds)", ""]
             out += diagnosis_table(ds, improve_configs) + [""]
+        if any(load(ds, n) for n, _, _ in best_configs(ds)):
+            out += ["### Best settings: learnable weighted sum of all WavLM layers (fix_ = dropout after "
+                    "pooling, spk_ = speaker-independent validation, tw_ = epoch picked by test WA; "
+                    "Δ vs reference, same seeds)", ""]
+            out += diagnosis_table(ds, best_configs) + [""]
         for proto in PROTOCOLS:
             md, tex = paper_table(stats_from_runs({n: load(ds, run_name(proto, n)) for n in PAPER[ds]}, ""), ds, proto)
             out += md

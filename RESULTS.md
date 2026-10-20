@@ -492,10 +492,39 @@ On the same seeds, concat (w/o AFEA) reaches 71.4 and WavLM alone 71.4.
 
 **Conclusion.** Neither the equations as written, nor the bottleneck MLP, nor the SA-Gate block reproduces the paper's AFEA-1..4 trend (above concat, improving up to 3 layers). In all three, the stacked fusion is only useful when L_con regularises it: L_con limits the scale growth of the written equations and prevents the gate collapse of SA-Gate. The missing ingredient is therefore unlikely to be a detail of the AFEA block that can be inferred from the paper or from [51]. The best unbiased AFEA-Net in this reproduction is about 72.3 WA (+0.6 over WavLM alone), with LayerNorm on the pooled vectors or with the SA-Gate block.
 
-## Next: candidate improvements (`improve` tier, pending)
+## Candidate improvements (`improve` tier)
 
 | Change | Why it might help | Evidence so far |
 |---|---|---|
 | `avgin_`: average every AFEA layer with S̃ (Eq. 14-15 as printed) | Anchors each layer to the encoder output instead of compounding the previous layer's scale. | The fused scale grows about 1.4× per layer with the text's reading. |
 | `spk_`: hold out whole training speakers for epoch selection | Random validation utterances share speakers with training: validation WA is about 78 while test WA is about 71, and test selection is worth +2 to +3, so the epoch chosen on validation is not the best one for unseen speakers. | – |
 | `cmb_`: WavLM layer weighted sum + LayerNorm / SA-Gate / speaker validation | The weighted sum is the largest single gain measured (+2.0 to +2.7). LayerNorm and SA-Gate are the best fusions (72.3). | Not yet combined. |
+
+### Result (IEMOCAP, 3 seeds, unbiased; Δ against the same row without the change, same seeds)
+
+| Change | Config | WA | Δ |
+|---|---|---|---|
+| Eq. 14-15 averaging (`avgin_`) | AFEA-3 / AFEA-4 (no L_con) | 70.6 ± 1.1 / 70.2 ± 0.3 | +0.7 / −0.1 |
+| | AFEA-Net / AFEA-Net + LN | 71.1 ± 0.4 / 72.4 ± 0.4 | −0.2 / +0.3 |
+| Speaker-independent validation (`spk_`) | WavLM / concat | 70.9 ± 0.2 / 70.4 ± 0.7 | −0.5 / −1.0 |
+| | AFEA-Net / AFEA-Net + LN | 70.8 ± 0.9 / 71.8 ± 0.6 | −0.5 / −0.3 |
+| WavLM weighted sum + … (`cmb_`, against wsum AFEA-Net 72.7) | + LayerNorm | 72.8 ± 0.4 | +0.1 |
+| | + SA-Gate block | **73.7 ± 0.3** (UAR 74.3) | +1.0 |
+| | + LayerNorm + speaker validation | 73.2 ± 1.0 | +0.6 |
+
+**Findings**
+
+1. **The averaging ambiguity does not matter.** Reading Eq. 14-15 literally changes nothing beyond seed noise (−0.2 to +0.7, std up to 1.1), and AFEA-k still stays below concat. It does not explain the AFEA gap.
+2. **Speaker-independent validation does not help; it is slightly worse (−0.3 to −1.0).** Holding out one whole training speaker removes only about 2.5 % more training data than the random split. However, it leaves a single speaker of a single gender to select the epoch on, which makes selection noisier. The +2 to +3 that test-session selection gains over validation selection is therefore not a selection bias that a better validation split can recover. It is mostly the optimism of picking the best of 50 epochs on the test set itself: with about 1,100 test utterances per session, one evaluation has a sampling std of about 1.4 WA.
+3. **Once WavLM is used well, the fusion design hardly matters.** With the weighted sum of all WavLM layers, the best dual-stream models match WavLM alone:
+
+   | Model | WA | UAR |
+   |---|---|---|
+   | WavLM weighted sum alone (`wsum_wavlm`) | 73.7 ± 0.2 | 74.5 |
+   | + SA-Gate fusion (`cmb_wsum_sag_afea_net`) | 73.7 ± 0.3 | 74.3 |
+   | + concat, post-pool dropout (`fix_wo_afea`) | 74.0 ± 0.6 | 74.9 |
+   | + paper's AFEA, post-pool dropout (`fix_afea_net`) | 73.8 ± 0.1 | 74.9 |
+
+   The SA-Gate block is the best fusion on these features (+1.0 over the paper's AFEA), but it only brings the dual-stream model back to the single-stream level.
+
+**Overall.** Under unbiased selection, the best models in this reproduction reach about 74 WA / 75 UAR. All of the gain over the paper's setting comes from the WavLM layer weighted sum. Fusing Fbank, whether by concat, AFEA, SA-Gate or LayerNorm, adds at most about 0.3. With test-session selection the same features reach 76.6 WA / 77.9 UAR (`t_fix_*`), above the paper's 75.1 / 75.3.
